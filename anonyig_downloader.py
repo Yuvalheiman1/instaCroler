@@ -88,6 +88,49 @@ class AnonyigDownloader:
                 await browser.close()
         return results, newest_id_found
 
-    def cleanup_files(self):
-        # Optional future implementation for cleaning up old files.
-        pass
+    async def download_user_stories_stream(self, username: str, last_known_id: str = None):
+        """
+        Async generator: yields (file_path, story_id) as soon as each story is downloaded.
+        """
+        newest_id_found = last_known_id or "0"
+        user_dir = os.path.join(self.download_dir, username)
+        os.makedirs(user_dir, exist_ok=True)
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context()
+            page = await context.new_page()
+            try:
+                url = f"https://insta-stories-viewer.com/{username}/"
+                print(f"Visiting {url}")
+                await page.goto(url, timeout=60000)
+                await page.wait_for_selector('ul.profile__tabs-media.profile__stories', timeout=30000)
+                story_items = await page.locator('ul.profile__tabs-media.profile__stories > li.profile__tabs-media-item').all()
+                print(f"Found {len(story_items)} stories for {username}.")
+                initial_id_to_check = int(last_known_id or "0")
+                for item in story_items:
+                    media_span = item.locator('span.profile__tabs-media-item-link')
+                    data_content = await media_span.get_attribute('data-content')
+                    data_media_type = await media_span.get_attribute('data-media-type')
+                    data_id = await media_span.get_attribute('data-id')
+                    if not (data_content and data_id):
+                        continue
+                    story_id = self._extract_story_id(data_id)
+                    try:
+                        story_id_int = int(story_id)
+                    except Exception:
+                        story_id_int = 0
+                    if story_id_int > initial_id_to_check:
+                        ext = '.mp4' if data_media_type == 'video' else '.jpg'
+                        filename = f"story_{username}_{story_id}{ext}"
+                        save_path = os.path.join(user_dir, filename)
+                        if self._download_file(data_content, save_path):
+                            print(f"Downloaded: {save_path}")
+                            yield save_path, story_id
+                            if story_id_int > int(newest_id_found):
+                                newest_id_found = story_id
+            except Exception as e:
+                print(f"An error occurred while processing {username}: {e}")
+            finally:
+                await context.close()
+                await browser.close()
