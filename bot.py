@@ -5,9 +5,9 @@ import json
 from dotenv import load_dotenv
 from anonyig_downloader import AnonyigDownloader
 from stories_tracker import StoriesTracker
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 
 # Load environment variables from a .env file
 load_dotenv()
@@ -27,6 +27,44 @@ def save_profiles(profiles):
 
 # --- Bot class using python-telegram-bot async ---
 class StoryMonitorBot:
+    def add_handlers(self):
+        from telegram.ext import MessageHandler, filters
+        self.application.add_handler(CommandHandler('start', self.cmd_start))
+        self.application.add_handler(CommandHandler('help', self.cmd_help))
+        self.application.add_handler(CommandHandler('refresh', self.cmd_refresh))
+        self.application.add_handler(CommandHandler('start_iteration', self.cmd_refresh))
+        self.application.add_handler(CommandHandler('list_profiles', self.cmd_list_profiles))
+        self.application.add_handler(CommandHandler('add_profile', self.cmd_add_profile))
+        self.application.add_handler(CommandHandler('remove_profile', self.cmd_remove_profile))
+        self.application.add_handler(CommandHandler('menu', self.cmd_menu))
+        self.application.add_handler(CallbackQueryHandler(self.button_callback))
+        # Add MessageHandler for text replies after Add/Remove button
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.text_reply_handler))
+    async def cmd_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        keyboard = [
+            [InlineKeyboardButton("🔄 Refresh", callback_data='refresh')],
+            [InlineKeyboardButton("👀 List Profiles", callback_data='list_profiles')],
+            [InlineKeyboardButton("➕ Add Profile", callback_data='add_profile')],
+            [InlineKeyboardButton("➖ Remove Profile", callback_data='remove_profile')]
+        ]
+        print("[LOG] /menu command received, showing menu")
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Choose an action:", reply_markup=reply_markup)
+
+    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        message = query.message
+        if query.data == 'refresh':
+            await self.cmd_refresh(update, context, reply_message=message)
+        elif query.data == 'list_profiles':
+            await self.cmd_list_profiles(update, context, reply_message=message)
+        elif query.data == 'add_profile':
+            await message.reply_text("What is the username to add?")
+            context.user_data['awaiting_add'] = True
+        elif query.data == 'remove_profile':
+            await message.reply_text("What is the username to remove?")
+            context.user_data['awaiting_remove'] = True
     def __init__(self):
         self.token = os.getenv('TELEGRAM_BOT_TOKEN')
         self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
@@ -38,37 +76,34 @@ class StoryMonitorBot:
         self.media_queue = asyncio.Queue()
         self.sending_task = None
 
-    def add_handlers(self):
-        self.application.add_handler(CommandHandler('start', self.cmd_start))
-        self.application.add_handler(CommandHandler('help', self.cmd_help))
-        self.application.add_handler(CommandHandler('refresh', self.cmd_refresh))
-        self.application.add_handler(CommandHandler('start_iteration', self.cmd_refresh))
-        self.application.add_handler(CommandHandler('list_profiles', self.cmd_list_profiles))
-        self.application.add_handler(CommandHandler('add_profile', self.cmd_add_profile))
-        self.application.add_handler(CommandHandler('remove_profile', self.cmd_remove_profile))
+    # Duplicate add_handlers removed
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("👋 Welcome! I monitor Instagram stories and send them here. Use /help for commands.")
 
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = (
-            "🤖 *Instagram Story Monitor Bot*\n\n"
-            "/refresh or /start_iteration - Check all monitored profiles now\n"
-            "/add_profile <username> - Add a profile to monitor\n"
-            "/remove_profile <username> - Remove a profile\n"
-            "/list_profiles - List all monitored profiles\n"
-            "/help - Show this help message"
+            "<b>🤖 Instagram Story Monitor Bot Help</b>\n\n"
+            "<b>Commands:</b>\n"
+            "• /refresh — Check all monitored profiles now (sends new stories to this chat)\n"
+            "• /add_profile &lt;username&gt; — Add a profile to monitor (e.g. /add_profile israel_bidur)\n"
+            "• /remove_profile &lt;username&gt; — Remove a profile (e.g. /remove_profile israel_bidur)\n"
+            "• /list_profiles — List all monitored profiles\n"
+            "• /menu — Show a menu with Telegram buttons for quick actions (Refresh, List, Add, Remove)\n"
+            "• /help — Show this help message\n\n"
+            "<i>Note: The /menu command will show Telegram buttons for quick actions. Button actions are limited to Refresh and List Profiles. For Add/Remove, use the commands above.</i>"
         )
-        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
-    async def cmd_list_profiles(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def cmd_list_profiles(self, update: Update, context: ContextTypes.DEFAULT_TYPE, reply_message=None):
         print("[LOG] /list_profiles command received")
+        target = reply_message if reply_message else update.message
         if not self.monitored_profiles:
             print("[LOG] No profiles are currently being monitored.")
-            await update.message.reply_text("📝 No profiles are currently being monitored.")
+            await target.reply_text("📝 No profiles are currently being monitored.")
         else:
             print(f"[LOG] Listing profiles: {self.monitored_profiles}")
-            await update.message.reply_text("👀 Currently monitored profiles:\n" + '\n'.join(f"- {p}" for p in self.monitored_profiles))
+            await target.reply_text("👀 Currently monitored profiles:\n" + '\n'.join(f"- {p}" for p in self.monitored_profiles))
 
     async def cmd_add_profile(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"[LOG] /add_profile command received with args: {context.args}")
@@ -102,10 +137,37 @@ class StoryMonitorBot:
         print(f"[LOG] Removed {username} from monitored profiles.")
         await update.message.reply_text(f"❌ Removed {username} from monitored profiles.")
 
-    async def cmd_refresh(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def cmd_refresh(self, update: Update, context: ContextTypes.DEFAULT_TYPE, reply_message=None):
         print("[LOG] /refresh or /start_iteration command received")
-        await update.message.reply_text("🔄 Checking all monitored profiles for new stories...")
-        await self.check_and_send_stories(update)
+        target = reply_message if reply_message else update.message
+        await target.reply_text("🔄 Checking all monitored profiles for new stories...")
+        # Run scraping as a background task in the main event loop
+        asyncio.create_task(self.check_and_send_stories(update, reply_message=target))
+    async def text_reply_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # Handles replies after Add/Remove button prompt
+        text = update.message.text.strip()
+        if context.user_data.get('awaiting_add'):
+            if text:
+                if text in self.monitored_profiles:
+                    await update.message.reply_text(f"{text} is already being monitored.")
+                else:
+                    self.monitored_profiles.append(text)
+                    save_profiles(self.monitored_profiles)
+                    await update.message.reply_text(f"✅ Added {text} to monitored profiles.")
+            else:
+                await update.message.reply_text("No username provided.")
+            context.user_data['awaiting_add'] = False
+        elif context.user_data.get('awaiting_remove'):
+            if text:
+                if text not in self.monitored_profiles:
+                    await update.message.reply_text(f"{text} is not in the monitored list.")
+                else:
+                    self.monitored_profiles.remove(text)
+                    save_profiles(self.monitored_profiles)
+                    await update.message.reply_text(f"❌ Removed {text} from monitored profiles.")
+            else:
+                await update.message.reply_text("No username provided.")
+            context.user_data['awaiting_remove'] = False
 
     async def start_sending_worker(self, app):
         print("[LOG] Starting background media sending worker...")
@@ -224,23 +286,24 @@ class StoryMonitorBot:
         with open(dlq_file, "w") as f:
             json.dump(dlq, f, indent=2)
 
-    async def check_and_send_stories(self, update: Update = None):
+    async def check_and_send_stories(self, update: Update = None, reply_message=None):
         print("[LOG] Starting check_and_send_stories")
-        context = update if update else None
+        # reply_message is used for button-triggered actions
+        target = reply_message if reply_message else (update.message if update else None)
         if not self.monitored_profiles:
             print("[LOG] No profiles to check.")
-            if context:
-                await context.message.reply_text("📝 No profiles to check.")
+            if target:
+                await target.reply_text("📝 No profiles to check.")
             return
         msg = f"🔍 Starting check for {len(self.monitored_profiles)} profiles..."
         print(f"[LOG] {msg}")
-        if context:
-            await context.message.reply_text(msg)
+        if target:
+            await target.reply_text(msg)
         for username in self.monitored_profiles:
             try:
                 print(f"[LOG] Checking @{username}")
-                if context:
-                    await context.message.reply_text(f"➡️ Checking @{username}...")
+                if target:
+                    await target.reply_text(f"➡️ Checking @{username}...")
                 last_id = self.stories_tracker.get_last_story_id(username)
                 print(f"[LOG] Last known story ID for @{username}: {last_id}")
                 # Download stories and enqueue each file as soon as it's ready
@@ -249,8 +312,8 @@ class StoryMonitorBot:
                         await self.media_queue.put((file_path, f"New story from @{username}", username, story_id))
             except Exception as e:
                 print(f"[LOG] Error with @{username}: {e}")
-                if context:
-                    await context.message.reply_text(f"⚠️ Error with @{username}: {e}")
+                if target:
+                    await target.reply_text(f"⚠️ Error with @{username}: {e}")
 
     async def _download_and_enqueue_stories(self, username, last_id):
         # This async generator yields (file_path, story_id) as soon as each story is downloaded
