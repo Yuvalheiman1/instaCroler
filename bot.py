@@ -121,19 +121,26 @@ class StoryMonitorBot:
                 print(f"[LOG] [PIPE] Error sending from queue: {e}")
             self.media_queue.task_done()
 
-    async def _send_media_from_worker(self, file_path, caption):
+    async def _send_media_from_worker(self, file_path, caption, max_retries=3):
         bot = self.application.bot
-        try:
-            if file_path.lower().endswith(('.mp4', '.mov', '.m4v')):
-                with open(file_path, 'rb') as video:
-                    await bot.send_video(chat_id=self.chat_id, video=video, caption=caption)
-            else:
-                with open(file_path, 'rb') as photo:
-                    await bot.send_photo(chat_id=self.chat_id, photo=photo, caption=caption)
-            print(f"[LOG] [PIPE] Successfully sent: {file_path}")
-        except Exception as e:
-            print(f"[LOG] [PIPE] Error sending media: {e}")
-            await bot.send_message(chat_id=self.chat_id, text=f"⚠️ Error sending media: {e}")
+        attempt = 0
+        while attempt < max_retries:
+            try:
+                if file_path.lower().endswith(('.mp4', '.mov', '.m4v')):
+                    with open(file_path, 'rb') as video:
+                        await bot.send_video(chat_id=self.chat_id, video=video, caption=caption)
+                else:
+                    with open(file_path, 'rb') as photo:
+                        await bot.send_photo(chat_id=self.chat_id, photo=photo, caption=caption)
+                print(f"[LOG] [PIPE] Successfully sent: {file_path}")
+                return
+            except Exception as e:
+                print(f"[LOG] [PIPE] Error sending media (attempt {attempt+1}): {e}")
+                attempt += 1
+                if attempt < max_retries:
+                    await asyncio.sleep(10)  # Wait before retrying
+                else:
+                    await bot.send_message(chat_id=self.chat_id, text=f"⚠️ Error sending media after {max_retries} attempts: {e}")
 
     async def check_and_send_stories(self, update: Update = None):
         print("[LOG] Starting check_and_send_stories")
@@ -176,11 +183,29 @@ class StoryMonitorBot:
             await self.media_queue.put((file_path, f"New story from @{username}"))
             yield file_path, story_id
 
+    async def periodic_scrape_worker(self):
+        while True:
+            print("[LOG] [SCHEDULER] Running periodic scrape...")
+            try:
+                await self.check_and_send_stories()
+                # Notify user when next automatic scrape will happen
+                next_time = 300  # 5 minutes in seconds
+                minutes = next_time // 60
+                await self.application.bot.send_message(
+                    chat_id=self.chat_id,
+                    text=f"⏰ Next automatic scrape will happen in {minutes} minutes."
+                )
+            except Exception as e:
+                print(f"[LOG] [SCHEDULER] Error in periodic scrape: {e}")
+            await asyncio.sleep(300)  # 5 minutes
+
     def run(self):
         print("Bot is running...")
-        # Start the background sending worker before polling
-        loop = asyncio.get_event_loop()
-        loop.create_task(self.media_sending_worker())
+        # Use post_init to start background workers inside the event loop
+        async def post_init_callback(app):
+            self.sending_task = asyncio.create_task(self.media_sending_worker())
+            self.periodic_task = asyncio.create_task(self.periodic_scrape_worker())
+        self.application.post_init = post_init_callback
         self.application.run_polling()
 
 if __name__ == "__main__":
