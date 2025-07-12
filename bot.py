@@ -63,8 +63,20 @@ class StoryMonitorBot:
             await message.reply_text("What is the username to add?")
             context.user_data['awaiting_add'] = True
         elif query.data == 'remove_profile':
-            await message.reply_text("What is the username to remove?")
-            context.user_data['awaiting_remove'] = True
+            # Send inline keyboard with each profile as a button
+            if not self.monitored_profiles:
+                await message.reply_text("📝 No profiles are currently being monitored.")
+            else:
+                keyboard = [
+                    [InlineKeyboardButton(p, callback_data=f'remove_profile:{p}')]
+                    for p in self.monitored_profiles
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await message.reply_text("Select a profile to remove:", reply_markup=reply_markup)
+        elif query.data.startswith('remove_profile:'):
+            # Extract username and call cmd_remove_profile
+            username = query.data.split(':', 1)[1]
+            await self.cmd_remove_profile(update, context, username=username, reply_message=message)
     def __init__(self):
         self.token = os.getenv('TELEGRAM_BOT_TOKEN')
         self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
@@ -121,21 +133,26 @@ class StoryMonitorBot:
         print(f"[LOG] Added {username} to monitored profiles.")
         await update.message.reply_text(f"✅ Added {username} to monitored profiles.")
 
-    async def cmd_remove_profile(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        print(f"[LOG] /remove_profile command received with args: {context.args}")
-        if not context.args:
-            print("[LOG] No username provided to remove.")
-            await update.message.reply_text("Usage: /remove_profile <username>")
-            return
-        username = context.args[0].strip()
+    async def cmd_remove_profile(self, update: Update, context: ContextTypes.DEFAULT_TYPE, username=None, reply_message=None):
+        # Accept username as argument for inline button callback, fallback to context.args for command
+        # reply_message allows sending response to button message
+        print(f"[LOG] /remove_profile command received")
+        reply_target = reply_message if reply_message is not None else update.message
+        if username is None:
+            # Called from command, get from context.args
+            if not context.args:
+                print("[LOG] No username provided to remove.")
+                await reply_target.reply_text("Usage: /remove_profile <username>")
+                return
+            username = context.args[0].strip()
         if username not in self.monitored_profiles:
             print(f"[LOG] {username} is not in the monitored list.")
-            await update.message.reply_text(f"{username} is not in the monitored list.")
+            await reply_target.reply_text(f"{username} is not in the monitored list.")
             return
         self.monitored_profiles.remove(username)
         save_profiles(self.monitored_profiles)
         print(f"[LOG] Removed {username} from monitored profiles.")
-        await update.message.reply_text(f"❌ Removed {username} from monitored profiles.")
+        await reply_target.reply_text(f"❌ Removed {username} from monitored profiles.")
 
     async def cmd_refresh(self, update: Update, context: ContextTypes.DEFAULT_TYPE, reply_message=None):
         print("[LOG] /refresh or /start_iteration command received")
@@ -343,7 +360,22 @@ class StoryMonitorBot:
         async def post_init_callback(app):
             self.sending_task = asyncio.create_task(self.media_sending_worker())
             self.periodic_task = asyncio.create_task(self.periodic_scrape_worker())
+
+        async def shutdown_callback(app):
+            print("[LOG] Shutting down, cancelling background tasks...")
+            tasks = []
+            if hasattr(self, 'sending_task') and self.sending_task:
+                self.sending_task.cancel()
+                tasks.append(self.sending_task)
+            if hasattr(self, 'periodic_task') and self.periodic_task:
+                self.periodic_task.cancel()
+                tasks.append(self.periodic_task)
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            print("[LOG] Background tasks cancelled.")
+
         self.application.post_init = post_init_callback
+        self.application.post_shutdown = shutdown_callback
         self.application.run_polling()
 
 if __name__ == "__main__":
