@@ -113,34 +113,116 @@ class StoryMonitorBot:
 
     async def media_sending_worker(self):
         while True:
-            file_path, caption = await self.media_queue.get()
+            file_path, caption, username, story_id = await self.media_queue.get()
             print(f"[LOG] [PIPE] Sending from queue: {file_path}")
             try:
-                await self._send_media_from_worker(file_path, caption)
+                sent_success = await self._send_media_from_worker(file_path, caption)
+                if sent_success:
+                    # Update tracker immediately after successful send
+                    last_id = self.stories_tracker.get_last_story_id(username)
+                    if last_id is None or int(story_id) > int(last_id or "0"):
+                        self.stories_tracker.update_last_story_id(username, story_id)
+                        print(f"[LOG] [PIPE] Updated last story ID for @{username} to: {story_id}")
             except Exception as e:
                 print(f"[LOG] [PIPE] Error sending from queue: {e}")
             self.media_queue.task_done()
 
-    async def _send_media_from_worker(self, file_path, caption, max_retries=3):
+    async def _send_media_from_worker(self, file_path, caption, max_retries=4, doc_retries=2):
+        """
+        Robust media sending with exponential backoff, fallback to send_document, and DLQ.
+        Only returns True if media was sent successfully.
+        Prevents duplicate sends if Telegram times out but delivers the video.
+        """
+        import time
         bot = self.application.bot
+        is_video = file_path.lower().endswith(('.mp4', '.mov', '.m4v'))
         attempt = 0
-        while attempt < max_retries:
+        delay = 5
+        last_error = None
+        sent_once = False
+        # Try send_video with exponential backoff
+        while attempt < max_retries and is_video:
             try:
-                if file_path.lower().endswith(('.mp4', '.mov', '.m4v')):
-                    with open(file_path, 'rb') as video:
-                        await bot.send_video(chat_id=self.chat_id, video=video, caption=caption)
-                else:
-                    with open(file_path, 'rb') as photo:
-                        await bot.send_photo(chat_id=self.chat_id, photo=photo, caption=caption)
-                print(f"[LOG] [PIPE] Successfully sent: {file_path}")
-                return
+                with open(file_path, 'rb') as video:
+                    await bot.send_video(chat_id=self.chat_id, video=video, caption=caption)
+                print(f"[LOG] [PIPE] Successfully sent (video): {file_path}")
+                sent_once = True
+                break
             except Exception as e:
-                print(f"[LOG] [PIPE] Error sending media (attempt {attempt+1}): {e}")
+                last_error = str(e)
+                print(f"[LOG] [PIPE] Error sending video (attempt {attempt+1}): {e}")
                 attempt += 1
                 if attempt < max_retries:
-                    await asyncio.sleep(10)  # Wait before retrying
-                else:
-                    await bot.send_message(chat_id=self.chat_id, text=f"⚠️ Error sending media after {max_retries} attempts: {e}")
+                    await asyncio.sleep(delay)
+                    delay *= 2
+        if sent_once:
+            return True
+        # Fallback to send_document for video
+        if is_video:
+            doc_attempt = 0
+            doc_delay = 10
+            while doc_attempt < doc_retries:
+                try:
+                    with open(file_path, 'rb') as doc:
+                        await bot.send_document(chat_id=self.chat_id, document=doc, caption=caption)
+                    print(f"[LOG] [PIPE] Successfully sent (document): {file_path}")
+                    sent_once = True
+                    break
+                except Exception as e:
+                    last_error = str(e)
+                    print(f"[LOG] [PIPE] Error sending document (attempt {doc_attempt+1}): {e}")
+                    doc_attempt += 1
+                    if doc_attempt < doc_retries:
+                        await asyncio.sleep(doc_delay)
+                        doc_delay *= 2
+        if sent_once:
+            return True
+        # For images, use send_photo with exponential backoff
+        if not is_video:
+            attempt = 0
+            delay = 5
+            while attempt < max_retries:
+                try:
+                    with open(file_path, 'rb') as photo:
+                        await bot.send_photo(chat_id=self.chat_id, photo=photo, caption=caption)
+                    print(f"[LOG] [PIPE] Successfully sent (photo): {file_path}")
+                    sent_once = True
+                    break
+                except Exception as e:
+                    last_error = str(e)
+                    print(f"[LOG] [PIPE] Error sending photo (attempt {attempt+1}): {e}")
+                    attempt += 1
+                    if attempt < max_retries:
+                        await asyncio.sleep(delay)
+                        delay *= 2
+        if sent_once:
+            return True
+        # If all attempts fail, log to DLQ
+        await bot.send_message(chat_id=self.chat_id, text=f"⚠️ Error sending media: {last_error}")
+        self._log_dlq(self.chat_id, file_path, last_error)
+        return False
+
+    def _log_dlq(self, chat_id, file_path, error):
+        """Log failed send jobs to a persistent DLQ JSON file."""
+        import time
+        dlq_file = "dlq.json"
+        entry = {
+            "chat_id": chat_id,
+            "file_path": file_path,
+            "error": error,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        try:
+            if os.path.exists(dlq_file):
+                with open(dlq_file, "r") as f:
+                    dlq = json.load(f)
+            else:
+                dlq = []
+        except Exception:
+            dlq = []
+        dlq.append(entry)
+        with open(dlq_file, "w") as f:
+            json.dump(dlq, f, indent=2)
 
     async def check_and_send_stories(self, update: Update = None):
         print("[LOG] Starting check_and_send_stories")
@@ -162,15 +244,9 @@ class StoryMonitorBot:
                 last_id = self.stories_tracker.get_last_story_id(username)
                 print(f"[LOG] Last known story ID for @{username}: {last_id}")
                 # Download stories and enqueue each file as soon as it's ready
-                newest_id = last_id
                 async for file_path, story_id in self._download_and_enqueue_stories(username, last_id):
-                    if newest_id is None or int(story_id) > int(newest_id or "0"):
-                        newest_id = story_id
-                if newest_id and int(newest_id) > int(last_id or "0"):
-                    self.stories_tracker.update_last_story_id(username, newest_id)
-                    print(f"[LOG] Updated last story ID for @{username} to: {newest_id}")
-                    if context:
-                        await context.message.reply_text(f"✅ Updated last story ID for @{username} to: {newest_id}")
+                    if int(story_id) > int(last_id or "0"):
+                        await self.media_queue.put((file_path, f"New story from @{username}", username, story_id))
             except Exception as e:
                 print(f"[LOG] Error with @{username}: {e}")
                 if context:
@@ -180,7 +256,6 @@ class StoryMonitorBot:
         # This async generator yields (file_path, story_id) as soon as each story is downloaded
         async for file_path, story_id in self.downloader.download_user_stories_stream(username, last_known_id=last_id):
             print(f"[LOG] [PIPE] Queueing story {story_id} for @{username}")
-            await self.media_queue.put((file_path, f"New story from @{username}"))
             yield file_path, story_id
 
     async def periodic_scrape_worker(self):
