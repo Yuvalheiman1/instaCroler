@@ -117,13 +117,15 @@ class StoryMonitorBot:
             print(f"[LOG] Listing profiles: {self.monitored_profiles}")
             await target.reply_text("👀 Currently monitored profiles:\n" + '\n'.join(f"- {p}" for p in self.monitored_profiles))
 
-    async def cmd_add_profile(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        print(f"[LOG] /add_profile command received with args: {context.args}")
-        if not context.args:
+    async def cmd_add_profile(self, update: Update, context: ContextTypes.DEFAULT_TYPE, username=None):
+        print(f"[LOG] /add_profile command received")
+        # Accept username directly for button/text reply, or from context.args for command
+        if hasattr(context, 'args') and context.args and not username:
+            username = context.args[0].strip()
+        if username is None:
             print("[LOG] No username provided to add.")
             await update.message.reply_text("Usage: /add_profile <username>")
             return
-        username = context.args[0].strip()
         if username in self.monitored_profiles:
             print(f"[LOG] {username} is already being monitored.")
             await update.message.reply_text(f"{username} is already being monitored.")
@@ -164,13 +166,14 @@ class StoryMonitorBot:
         # Handles replies after Add/Remove button prompt
         text = update.message.text.strip()
         if context.user_data.get('awaiting_add'):
+            # Instagram username validation: 30 chars max, only letters, numbers, periods, underscores
+            import re
+            username_pattern = r'^[A-Za-z0-9._]{1,30}$'
             if text:
-                if text in self.monitored_profiles:
-                    await update.message.reply_text(f"{text} is already being monitored.")
+                if not re.match(username_pattern, text):
+                    await update.message.reply_text("❌ Invalid username. Only letters, numbers, periods, and underscores allowed. Max 30 characters.")
                 else:
-                    self.monitored_profiles.append(text)
-                    save_profiles(self.monitored_profiles)
-                    await update.message.reply_text(f"✅ Added {text} to monitored profiles.")
+                    await self.cmd_add_profile(update, context, username=text)
             else:
                 await update.message.reply_text("No username provided.")
             context.user_data['awaiting_add'] = False
