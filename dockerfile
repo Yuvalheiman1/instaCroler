@@ -12,14 +12,19 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy project files
+# Copy requirements first for better caching
+COPY requirements.txt .
+RUN python -m venv /opt/venv
+RUN /opt/venv/bin/pip install --upgrade pip && /opt/venv/bin/pip install -r requirements.txt
+
+# Copy the rest of the application
 COPY . .
 
-# Create virtual environment
-RUN python -m venv /opt/venv
+# Create necessary directories
+RUN mkdir -p downloads data
 
-# Install Python dependencies in venv
-RUN /opt/venv/bin/pip install --upgrade pip && /opt/venv/bin/pip install -r requirements.txt
+# Set permissions
+RUN chmod +x railway_postinstall.sh
 
 # Install Playwright browser
 RUN /opt/venv/bin/python -m playwright install chromium
