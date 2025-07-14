@@ -15,7 +15,9 @@ WORKDIR /app
 # Copy requirements first for better caching
 COPY requirements.txt .
 RUN python -m venv /opt/venv
-RUN /opt/venv/bin/pip install --upgrade pip && /opt/venv/bin/pip install -r requirements.txt
+RUN . /opt/venv/bin/activate && \
+    pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application
 COPY . .
@@ -29,5 +31,9 @@ RUN chmod +x railway_postinstall.sh
 # Install Playwright browser
 RUN /opt/venv/bin/python -m playwright install chromium
 
+# Add virtual environment to PATH
+ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONPATH="/app:$PYTHONPATH"
+
 # Default start command
-CMD ["/opt/venv/bin/python", "run_bot_wrapper.py"]
+CMD ["python", "run_bot_wrapper.py"]
