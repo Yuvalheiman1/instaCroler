@@ -1,8 +1,13 @@
 [phases.install]
 commands = [
-    # Combine both commands into a single string for execution
-    "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install -r requirements.txt && playwright install --with-deps"
+  "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install -r requirements.txt"
+]
+
+[phases.postInstall]
+commands = [
+  # Playwright should install **after** dependencies, not in the same phase
+  ". /opt/venv/bin/activate && playwright install chromium"
 ]
 
 [start]
-cmd = "python run_bot_wrapper.py"
+cmd = ". /opt/venv/bin/activate && python run_bot_wrapper.py"
