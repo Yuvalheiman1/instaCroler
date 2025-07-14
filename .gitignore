@@ -49,7 +49,6 @@ coverage.xml
 
 # dotenv
 .env
-.env.*
 
 # VS Code
 .vscode/
@@ -61,12 +60,6 @@ coverage.xml
 # Pyre type checker
 .pyre/
 
-# Local data
-insta_session.json
-stories_tracker.json
-stories_history.json
-downloads/
-monitored_profiles.json
 
 # System files
 .DS_Store
