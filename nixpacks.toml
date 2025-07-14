@@ -1,13 +1,26 @@
+# nixpacks.toml
+
+[phases.setup]
+nixpkgs = ["python310", "nodejs", "curl", "wget"]
+
 [phases.install]
 commands = [
-  "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install -r requirements.txt"
+  "python -m venv /opt/venv",
+  "/opt/venv/bin/pip install --upgrade pip",
+  "/opt/venv/bin/pip install -r requirements.txt"
 ]
 
 [phases.postInstall]
 commands = [
-  # Playwright should install **after** dependencies, not in the same phase
-  ". /opt/venv/bin/activate && playwright install chromium"
+  "/opt/venv/bin/playwright install chromium"
 ]
 
+[variables]
+PLAYWRIGHT_BROWSERS_PATH = "/root/playwright-cache"
+
+[caches.playwright]
+path = "/root/playwright-cache"
+
+
 [start]
-cmd = ". /opt/venv/bin/activate && python run_bot_wrapper.py"
+cmd = "/opt/venv/bin/python run_bot_wrapper.py"
