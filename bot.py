@@ -12,10 +12,16 @@ from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQuer
 # Load environment variables from a .env file
 load_dotenv()
 
-PROFILES_FILE = "monitored_profiles.json"
+# File paths configuration
+DATA_DIR = "data"
+PROFILES_FILE = os.path.join(DATA_DIR, "monitored_profiles.json")
+DLQ_FILE = os.path.join(DATA_DIR, "dlq.json")
+STORIES_HISTORY_FILE = os.path.join(DATA_DIR, "stories_history.json")
 
 # --- Persistent profile storage ---
 def load_profiles():
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR)
     if os.path.exists(PROFILES_FILE):
         with open(PROFILES_FILE, 'r') as f:
             return json.load(f)
@@ -80,7 +86,8 @@ class StoryMonitorBot:
     def __init__(self):
         self.token = os.getenv('TELEGRAM_BOT_TOKEN')
         self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
-        self.downloader = AnonyigDownloader()
+        self.download_path = os.getenv('DOWNLOAD_PATH', 'downloads')
+        self.downloader = AnonyigDownloader(download_dir=self.download_path)
         self.stories_tracker = StoriesTracker()
         self.monitored_profiles = load_profiles()
         self.application = Application.builder().token(self.token).build()
@@ -287,7 +294,6 @@ class StoryMonitorBot:
     def _log_dlq(self, chat_id, file_path, error):
         """Log failed send jobs to a persistent DLQ JSON file."""
         import time
-        dlq_file = "dlq.json"
         entry = {
             "chat_id": chat_id,
             "file_path": file_path,
@@ -295,15 +301,15 @@ class StoryMonitorBot:
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }
         try:
-            if os.path.exists(dlq_file):
-                with open(dlq_file, "r") as f:
+            if os.path.exists(DLQ_FILE):
+                with open(DLQ_FILE, "r") as f:
                     dlq = json.load(f)
             else:
                 dlq = []
         except Exception:
             dlq = []
         dlq.append(entry)
-        with open(dlq_file, "w") as f:
+        with open(DLQ_FILE, "w") as f:
             json.dump(dlq, f, indent=2)
 
     async def check_and_send_stories(self, update: Update = None, reply_message=None):

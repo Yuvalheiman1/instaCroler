@@ -7,13 +7,19 @@ class StoriesTracker:
     A thread-safe class to track the last story ID for each user.
     It persists the data to a JSON file.
     """
-    def __init__(self, filepath="stories_tracker.json"):
+    def __init__(self, filepath=None):
         """
         Initializes the tracker.
 
         Args:
             filepath (str): The path to the JSON file for storing data.
         """
+        if filepath is None:
+            data_dir = "data"
+            if not os.path.exists(data_dir):
+                os.makedirs(data_dir)
+            filepath = os.path.join(data_dir, "stories_tracker.json")
+        
         self.filepath = filepath
         self._lock = threading.Lock()
         self.data = self._load_data()
