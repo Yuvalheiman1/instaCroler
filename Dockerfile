@@ -22,8 +22,9 @@ RUN . /opt/venv/bin/activate && \
 # Copy the rest of the application
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p downloads data
+# Create necessary directories and set permissions
+RUN mkdir -p downloads data && \
+    chmod 777 downloads data
 
 # Set permissions
 RUN chmod +x railway_postinstall.sh
