@@ -6,7 +6,7 @@ import subprocess
 DOWNLOADS_DIR = os.path.join(os.path.dirname(__file__), 'downloads')
 BOT_SCRIPT = os.path.join(os.path.dirname(__file__), 'bot.py')
 PYTHON_EXEC = 'python'  # or 'python3' if needed
-INTERVAL_SECONDS = 10 * 60 * 60  # 10 hours
+INTERVAL_SECONDS = 2 * 60 * 60  # 10 hours
 
 def delete_downloads():
     if os.path.exists(DOWNLOADS_DIR):
