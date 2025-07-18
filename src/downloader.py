@@ -99,8 +99,13 @@ class AnonyigDownloader:
                     # Check if it's already active
                     is_active = await stories_tab.evaluate("el => el.classList.contains('tabs-component__button--active')")
                     if not is_active:
-                        await stories_tab.click()
-                        print("Stories tab button clicked.")
+                        try:
+                            await stories_tab.click()
+                            print("Stories tab button clicked.")
+                            # Wait for possible navigation or reload
+                            await page.wait_for_timeout(1500)
+                        except Exception as e:
+                            print(f"Error clicking stories tab: {e}")
                     else:
                         print("Stories tab already active.")
                 except Exception as e:
