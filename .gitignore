@@ -1,66 +1,35 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# C extensions
-*.so
-
-# Distribution / packaging
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-egg-info/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-.hypothesis/
-.pytest_cache/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# pyenv
-.python-version
-
-# dotenv
+# Environment variables
 .env
 
-# VS Code
-.vscode/
+# Data and logs
+data/
+logs/
+downloads/
+debug_videos/
 
-# mypy
-.mypy_cache/
-.dmypy.json
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
 
-# Pyre type checker
-.pyre/
+# IDEs
+.vscode/settings.json
+.idea/
 
-
-# System files
+# OS
 .DS_Store
 Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Development
+*.backup
+*.bak

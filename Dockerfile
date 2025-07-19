@@ -36,5 +36,5 @@ RUN /opt/venv/bin/python -m playwright install chromium
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONPATH="/app:$PYTHONPATH"
 
-# Default start command
-CMD ["python", "run_bot_wrapper.py"]
+# Default start command (runs the main bot)
+CMD ["python", "bot_main.py"]
