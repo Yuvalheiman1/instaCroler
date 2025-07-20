@@ -171,7 +171,7 @@ class StoryScraper:
                 # Send stories to Telegram
                 for file_path, story_id in stories:
                     media_item = {
-                        "file_path": file_path,
+                        "path": file_path,  # Changed from "file_path" to "path"
                         "id": story_id,
                         "type": "video" if file_path.lower().endswith(('.mp4', '.mov', '.avi', '.webm')) else "image"
                     }
@@ -233,7 +233,7 @@ class StoryScraper:
             try:
                 if file_path:  # This is a new story
                     media_item = {
-                        "file_path": file_path,
+                        "path": file_path,  # Changed from "file_path" to "path"
                         "id": story_id,
                         "type": "video" if file_path.lower().endswith(('.mp4', '.mov', '.avi', '.webm')) else "image"
                     }
@@ -271,24 +271,31 @@ class StoryScraper:
         
         try:
             # Download stories, passing the last seen ID to the downloader
-            media_items = await self.downloader.download_user_stories(username, last_seen_story_id)
+            results, newest_story_id = await self.downloader.download_user_stories(username, last_seen_story_id)
             
-            if not media_items:
+            if not results:
                 self.logger.info(f"No new stories found for '{username}'.")
                 return
             
-            self.logger.info(f"Found {len(media_items)} new stories for '{username}'.")
+            self.logger.info(f"Found {len(results)} new stories for '{username}'.")
             
-            # Send stories to Telegram and get the new last story ID
-            new_last_story_id = None
-            for item in media_items:
-                await self._send_media_to_telegram(chat_id, username, item)
-                new_last_story_id = item.get("id") # Assume the last item's ID is the latest
+            # Convert results to media items format and send to Telegram
+            for file_path, story_id in results:
+                # Determine media type from file extension
+                media_type = 'video' if file_path.lower().endswith(('.mp4', '.mov', '.avi', '.webm')) else 'image'
+                
+                media_item = {
+                    "type": media_type,
+                    "path": file_path,
+                    "id": story_id
+                }
+                
+                await self._send_media_to_telegram(chat_id, username, media_item)
             
             # Update the last story ID in the database
-            if new_last_story_id:
-                self.db.update_last_story_id(chat_id, username, new_last_story_id)
-                self.logger.info(f"Updated last story ID for '{username}' to {new_last_story_id}")
+            if newest_story_id:
+                self.db.update_last_story_id(chat_id, username, newest_story_id)
+                self.logger.info(f"Updated last story ID for '{username}' to {newest_story_id}")
                 
         except Exception as e:
             self.logger.error(f"An unexpected error occurred while processing {username}: {e}")

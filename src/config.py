@@ -37,7 +37,7 @@ class Config:
         'max_lazy_load_attempts': 15,
         'chunk_size': 8192,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'max_concurrent_workers': 2,
+        'max_concurrent_workers': 5,
         'max_concurrent_downloads': 3,
         'enable_concurrent': True,
         'browser_launch_stagger': True,
