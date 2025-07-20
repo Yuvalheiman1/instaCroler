@@ -21,27 +21,27 @@ class Config:
     
     # Timeouts and delays (in milliseconds)
     TIMEOUTS = {
-        'page_load': 180000,  # Increased to 3 minutes for slow connections
-        'element_wait': 60000,  # Increased to 1 minute
-        'search_delay': 2000,   # Slightly increased
-        'stories_tab_delay': 2000,  # Increased
-        'scroll_delay': 1500,   # Slightly increased
-        'download_delay': 1000,  # Increased for slower connections
-        'retry_base_delay': 2000,  # Increased base delay
-        'browser_launch_delay': 5000  # Increased delay between launches for slow connections
+        'page_load': 60000,
+        'element_wait': 30000,
+        'search_delay': 1500,
+        'stories_tab_delay': 1200,
+        'scroll_delay': 1200,
+        'download_delay': 500,
+        'retry_base_delay': 1000,
+        'browser_launch_delay': 2000
     }
     
     # Download settings
     DOWNLOAD_SETTINGS = {
         'max_retries': 3,
         'max_lazy_load_attempts': 15,
-        'chunk_size': 4096,  # Reduced chunk size for slower connections
+        'chunk_size': 8192,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'max_concurrent_workers': 4,  # Reduced to 1 for slow connections
-        'max_concurrent_downloads': 2,  # Reduced for slow connections
-        'enable_concurrent': False,  # Disabled by default for slow connections
-        'browser_launch_stagger': True,  # Stagger browser launches to avoid timeouts
-        'slow_connection_mode': True  # Enable optimizations for slow connections
+        'max_concurrent_workers': 2,
+        'max_concurrent_downloads': 3,
+        'enable_concurrent': True,
+        'browser_launch_stagger': True,
+        'slow_connection_mode': False
     }
     
     # File extensions

@@ -181,13 +181,10 @@ class AnonyigDownloader:
                 if Config.DOWNLOAD_SETTINGS.get('slow_connection_mode', False):
                     profile_logger.info("Using slow connection mode - waiting for 'domcontentloaded' instead of 'load'")
                     await page.goto(url, timeout=Config.TIMEOUTS['page_load'], wait_until='domcontentloaded')
-                else:
-                    await page.goto(url, timeout=Config.TIMEOUTS['page_load'])
-                    
-                # Extra wait for slow connections
-                if Config.DOWNLOAD_SETTINGS.get('slow_connection_mode', False):
+                    # Extra wait for slow connections
                     await page.wait_for_timeout(5000)  # Extra 5 second wait
                 else:
+                    await page.goto(url, timeout=Config.TIMEOUTS['page_load'])
                     await page.wait_for_timeout(2000)
 
                 # Find and fill the search input
@@ -234,17 +231,88 @@ class AnonyigDownloader:
                 profile_logger.info(f"Found {len(story_items)} stories for {username}.")
                 
                 if len(story_items) == 0:
-                    profile_logger.warning("No stories found. Checking page structure...")
-                    # Debug: check what's actually on the page
+                    profile_logger.warning("No stories found. Performing comprehensive page analysis...")
+                    
+                    # Check page URL to ensure we're on the right page
+                    current_url = page.url
+                    profile_logger.info(f"Current page URL: {current_url}")
+                    
+                    # Get page title
+                    try:
+                        page_title = await page.title()
+                        profile_logger.info(f"Page title: {page_title}")
+                    except:
+                        pass
+                    
+                    # Check what's actually on the page
                     page_html = await page.content()
                     profile_logger.debug(f"Page HTML contains 'profile-media-list': {'profile-media-list' in page_html}")
                     profile_logger.debug(f"Page HTML contains 'button__download': {'button__download' in page_html}")
+                    profile_logger.debug(f"Page HTML contains 'stories': {'stories' in page_html.lower()}")
+                    profile_logger.debug(f"Page HTML contains username '{username}': {username in page_html.lower()}")
+                    
+                    # Look for any download links or media
+                    all_links = await page.query_selector_all('a[href]')
+                    download_links = []
+                    for link in all_links:
+                        href = await link.get_attribute('href')
+                        if href and ('download' in href.lower() or '.mp4' in href.lower() or '.jpg' in href.lower()):
+                            download_links.append(href)
+                    
+                    profile_logger.info(f"Found {len(download_links)} potential download links")
+                    if download_links:
+                        for i, link in enumerate(download_links[:3]):  # Log first 3
+                            profile_logger.debug(f"Download link {i+1}: {link}")
+                    
+                    # Check for error messages on the page
+                    error_selectors = ['.error', '.alert', '.warning', '.no-content', '.not-found']
+                    for error_sel in error_selectors:
+                        error_el = await page.query_selector(error_sel)
+                        if error_el:
+                            error_text = await error_el.text_content()
+                            profile_logger.warning(f"Found error message: {error_text}")
                     
                     # Save page HTML for debugging
-                    debug_path = os.path.join(Config.DIRECTORIES['debug_videos'], f"debug_{username}.html")
+                    debug_path = os.path.join(Config.DIRECTORIES['debug_videos'], f"debug_no_stories_{username}.html")
                     with open(debug_path, 'w', encoding='utf-8') as f:
                         f.write(page_html)
                     profile_logger.info(f"Saved page HTML to {debug_path}")
+                    
+                    # Take a screenshot for visual debugging
+                    try:
+                        screenshot_path = os.path.join(Config.DIRECTORIES['debug_videos'], f"debug_screenshot_{username}.png")
+                        await page.screenshot(path=screenshot_path, full_page=True)
+                        profile_logger.info(f"Saved screenshot to {screenshot_path}")
+                    except Exception as screenshot_error:
+                        profile_logger.warning(f"Failed to save screenshot: {screenshot_error}")
+                    
+                    # Try alternative URL approach if direct search fails
+                    profile_logger.info("Trying alternative URL approach...")
+                    try:
+                        # Try navigating directly to user's page
+                        direct_url = f"https://anonyig.com/en/profile/{username}"
+                        profile_logger.info(f"Trying direct URL: {direct_url}")
+                        await page.goto(direct_url, timeout=Config.TIMEOUTS['page_load'], wait_until='domcontentloaded')
+                        await page.wait_for_timeout(3000)
+                        
+                        # Try to find stories again
+                        items = await page.query_selector_all(Config.SELECTORS['story_items'])
+                        if items:
+                            story_items = items
+                            profile_logger.info(f"Found {len(story_items)} stories via direct URL")
+                                
+                    except Exception as direct_error:
+                        profile_logger.warning(f"Direct URL approach failed: {direct_error}")
+                
+                # If still no stories, try one more alternative approach
+                if len(story_items) == 0:
+                    profile_logger.info("Trying to find any media elements as fallback...")
+                    # Look for any media elements that might be stories
+                    media_elements = await page.query_selector_all('img[src*="instagram"], video[src*="instagram"], a[href*=".mp4"], a[href*=".jpg"]')
+                    if media_elements:
+                        profile_logger.info(f"Found {len(media_elements)} potential media elements as fallback")
+                        # We'll process these as story items
+                        story_items = media_elements
                 
                 # Process stories sequentially (from old_downloader - more reliable)
                 for index, item in enumerate(story_items):
