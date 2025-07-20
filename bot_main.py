@@ -7,6 +7,9 @@ from datetime import datetime
 from typing import Optional, Dict, List
 from dotenv import load_dotenv
 
+# Load environment variables FIRST
+load_dotenv()
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -17,9 +20,6 @@ from telegram.ext import (
 from src.database import db
 from src.config import Config
 from src.logger import get_logger
-
-# Load environment variables
-load_dotenv()
 
 class InstagramStoryBot:
     """

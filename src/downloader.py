@@ -1,7 +1,8 @@
 import os
 import requests
 import time
-from typing import Optional
+import asyncio
+from typing import Optional, List, Tuple, Dict
 from datetime import datetime
 from playwright.async_api import async_playwright
 from .config import Config
@@ -10,7 +11,8 @@ from .logger import get_logger, get_profile_logger
 class AnonyigDownloader:
     """
     A class to download Instagram stories anonymously using a website.
-    It uses Playwright for browser automation.
+    It uses Playwright for browser automation and combines the best logic
+    from both the old downloader and the copy version.
     """
     def __init__(self):
         """Initializes the downloader."""
@@ -114,6 +116,9 @@ class AnonyigDownloader:
         """
         Scrapes and downloads new stories (images and videos) for a given Instagram user from anonyig.com.
         Returns a list of (file_path, story_id) and the newest story_id found.
+        
+        This method combines the reliable Playwright logic from old_downloader with 
+        the Redis-compatible interface from downloader copy.
         """
         # Create profile-specific logger
         profile_logger = get_profile_logger(username)
@@ -124,7 +129,7 @@ class AnonyigDownloader:
         os.makedirs(user_dir, exist_ok=True)
         os.makedirs(Config.DIRECTORIES['debug_videos'], exist_ok=True)
 
-        # Extract timestamp from last_known_id (format: "timestamp_index")
+        # Extract timestamp from last_seen_story_id (format: "timestamp_index")
         if last_seen_story_id and "_" in last_seen_story_id:
             initial_id_to_check = int(last_seen_story_id.split("_")[0])
         else:
@@ -134,7 +139,22 @@ class AnonyigDownloader:
         profile_logger.info(f"Last known ID: {last_seen_story_id}, Initial ID to check: {initial_id_to_check}")
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            # Optimize browser for slow connections (from copy version)
+            browser_args = ['--disable-web-security', '--disable-features=VizDisplayCompositor']
+            if Config.DOWNLOAD_SETTINGS.get('slow_connection_mode', False):
+                browser_args.extend([
+                    '--disable-background-networking',
+                    '--disable-background-timer-throttling',
+                    '--disable-renderer-backgrounding',
+                    '--disable-backgrounding-occluded-windows',
+                    '--disable-dev-shm-usage',
+                    '--no-sandbox'
+                ])
+            
+            browser = await p.chromium.launch(
+                headless=True,
+                args=browser_args
+            )
             context = await browser.new_context(
                 record_video_dir=Config.DIRECTORIES['debug_videos'], 
                 viewport={'width': 1280, 'height': 720}
@@ -156,8 +176,19 @@ class AnonyigDownloader:
             try:
                 url = Config.BASE_URL
                 profile_logger.info(f"Visiting {url}")
-                await page.goto(url, timeout=Config.TIMEOUTS['page_load'])
-                await page.wait_for_timeout(2000)
+                
+                # Use different wait strategy for slow connections (from copy version)
+                if Config.DOWNLOAD_SETTINGS.get('slow_connection_mode', False):
+                    profile_logger.info("Using slow connection mode - waiting for 'domcontentloaded' instead of 'load'")
+                    await page.goto(url, timeout=Config.TIMEOUTS['page_load'], wait_until='domcontentloaded')
+                else:
+                    await page.goto(url, timeout=Config.TIMEOUTS['page_load'])
+                    
+                # Extra wait for slow connections
+                if Config.DOWNLOAD_SETTINGS.get('slow_connection_mode', False):
+                    await page.wait_for_timeout(5000)  # Extra 5 second wait
+                else:
+                    await page.wait_for_timeout(2000)
 
                 # Find and fill the search input
                 profile_logger.info("Looking for search input...")
@@ -215,6 +246,7 @@ class AnonyigDownloader:
                         f.write(page_html)
                     profile_logger.info(f"Saved page HTML to {debug_path}")
                 
+                # Process stories sequentially (from old_downloader - more reliable)
                 for index, item in enumerate(story_items):
                     profile_logger.info(f"Processing story {index + 1}/{len(story_items)}")
                     
@@ -280,7 +312,7 @@ class AnonyigDownloader:
                             if await self._download_with_retry(direct_url, save_path, profile_logger):
                                 profile_logger.info(f"Downloaded: {save_path}")
                                 results.append((save_path, story_id))
-                                if story_id_int > int(newest_id_found):
+                                if story_id_int > int(newest_id_found.split("_")[0] if "_" in newest_id_found else newest_id_found):
                                     newest_id_found = story_id
                             else:
                                 profile_logger.warning(f"Failed to download {filename}")
@@ -310,3 +342,168 @@ class AnonyigDownloader:
         results, newest_id = await self.download_user_stories(username, last_seen_story_id)
         for file_path, story_id in results:
             yield file_path, story_id
+
+
+class ConcurrentDownloader:
+    """
+    Concurrent downloader that manages multiple AnonyigDownloader workers
+    to process multiple profiles simultaneously, with Redis DB compatibility.
+    
+    This class is taken from the copy version which works well with Redis.
+    """
+    
+    def __init__(self, max_workers: int = None):
+        """
+        Initialize the concurrent downloader.
+        
+        Args:
+            max_workers: Maximum number of concurrent workers (defaults to config value)
+        """
+        self.max_workers = max_workers or Config.DOWNLOAD_SETTINGS['max_concurrent_workers']
+        self.logger = get_logger()
+        self.semaphore = asyncio.Semaphore(self.max_workers)
+        self.logger.info(f"ConcurrentDownloader initialized with {self.max_workers} workers")
+    
+    async def _download_profile_worker(self, username: str, last_seen_story_id: str = None, worker_id: int = 0) -> Tuple[str, List[Tuple[str, str]], str]:
+        """
+        Worker function to download stories for a single profile.
+        
+        Args:
+            username: Instagram username
+            last_seen_story_id: Last seen story ID for this profile
+            worker_id: Worker identifier for staggered launches
+            
+        Returns:
+            Tuple of (username, results, newest_id)
+        """
+        async with self.semaphore:
+            # Stagger browser launches to avoid overwhelming the site
+            if Config.DOWNLOAD_SETTINGS.get('browser_launch_stagger', True):
+                stagger_delay = worker_id * (Config.TIMEOUTS.get('browser_launch_delay', 2000) / 1000)
+                if stagger_delay > 0:
+                    self.logger.info(f"Worker {worker_id} waiting {stagger_delay:.1f}s before launching browser for {username}")
+                    await asyncio.sleep(stagger_delay)
+            
+            downloader = AnonyigDownloader()
+            max_retries = Config.DOWNLOAD_SETTINGS.get('max_retries', 3)
+            
+            for attempt in range(max_retries):
+                try:
+                    self.logger.info(f"Worker {worker_id} started for profile: {username} (attempt {attempt + 1})")
+                    results, newest_id = await downloader.download_user_stories(username, last_seen_story_id)
+                    self.logger.info(f"Worker {worker_id} completed for profile: {username} - {len(results)} stories downloaded")
+                    return username, results, newest_id
+                except Exception as e:
+                    self.logger.warning(f"Worker {worker_id} attempt {attempt + 1} failed for profile {username}: {e}")
+                    if attempt < max_retries - 1:
+                        # Exponential backoff with jitter
+                        wait_time = (2 ** attempt) + (worker_id * 0.5)  # Add worker-specific jitter
+                        self.logger.info(f"Retrying {username} in {wait_time:.1f} seconds...")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        self.logger.error(f"Worker {worker_id} failed for profile {username} after {max_retries} attempts")
+            
+            return username, [], last_seen_story_id or "0"
+    
+    async def download_multiple_profiles(self, profile_data: Dict[str, str]) -> Dict[str, Tuple[List[Tuple[str, str]], str]]:
+        """
+        Download stories for multiple profiles concurrently.
+        
+        Args:
+            profile_data: Dictionary mapping username to last_seen_story_id
+            
+        Returns:
+            Dictionary mapping username to (results, newest_id) tuples
+        """
+        if not profile_data:
+            return {}
+        
+        self.logger.info(f"Starting concurrent download for {len(profile_data)} profiles")
+        
+        # Create tasks for all profiles with worker IDs
+        tasks = [
+            self._download_profile_worker(username, last_seen_story_id, idx)
+            for idx, (username, last_seen_story_id) in enumerate(profile_data.items())
+        ]
+        
+        # Execute all tasks concurrently
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        except Exception as e:
+            self.logger.error(f"Error in concurrent download: {e}")
+            return {}
+        
+        # Process results
+        download_results = {}
+        successful_downloads = 0
+        
+        for result in results:
+            if isinstance(result, Exception):
+                self.logger.error(f"Task failed with exception: {result}")
+                continue
+                
+            username, stories, newest_id = result
+            download_results[username] = (stories, newest_id)
+            if stories:
+                successful_downloads += len(stories)
+        
+        self.logger.info(f"Concurrent download completed: {successful_downloads} total stories from {len(download_results)} profiles")
+        return download_results
+    
+    async def download_profiles_stream(self, profile_data: Dict[str, str]):
+        """
+        Stream stories as they are downloaded from multiple profiles concurrently.
+        
+        Args:
+            profile_data: Dictionary mapping username to last_seen_story_id
+            
+        Yields:
+            Tuples of (username, file_path, story_id)
+        """
+        if not profile_data:
+            return
+        
+        self.logger.info(f"Starting concurrent streaming download for {len(profile_data)} profiles")
+        
+        # Create a queue to collect results from workers
+        result_queue = asyncio.Queue()
+        
+        async def worker_with_queue(username: str, last_seen_story_id: str = None, worker_id: int = 0):
+            """Worker that puts results into the queue as they complete"""
+            try:
+                username_result, stories, newest_id = await self._download_profile_worker(username, last_seen_story_id, worker_id)
+                for file_path, story_id in stories:
+                    await result_queue.put((username_result, file_path, story_id))
+                await result_queue.put((username_result, None, newest_id))  # Signal completion for this profile
+            except Exception as e:
+                self.logger.error(f"Stream worker {worker_id} failed for {username}: {e}")
+                await result_queue.put((username, None, None))  # Signal failure
+        
+        # Start all workers with IDs
+        tasks = [
+            asyncio.create_task(worker_with_queue(username, last_seen_story_id, idx))
+            for idx, (username, last_seen_story_id) in enumerate(profile_data.items())
+        ]
+        
+        completed_profiles = set()
+        total_profiles = len(profile_data)
+        
+        # Yield results as they come in
+        while len(completed_profiles) < total_profiles:
+            try:
+                username, file_path, story_id = await asyncio.wait_for(result_queue.get(), timeout=60.0)
+                
+                if file_path is None:  # Completion signal
+                    completed_profiles.add(username)
+                    if story_id:  # This is the newest_id, not None for failure
+                        self.logger.info(f"Profile {username} completed with newest_id: {story_id}")
+                else:
+                    yield username, file_path, story_id
+                    
+            except asyncio.TimeoutError:
+                self.logger.warning("Timeout waiting for download results")
+                break
+        
+        # Wait for all tasks to complete
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self.logger.info("Concurrent streaming download completed")

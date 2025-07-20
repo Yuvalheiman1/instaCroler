@@ -43,12 +43,14 @@ async def test_scraper(username):
     print(f"🧪 Testing scraper with username: {username}")
     
     sys.path.append('src')
-    from src.downloader import AnonyigDownloader
+    from src.downloader import AnonyigDownloader, ConcurrentDownloader
     
+    # Test regular downloader
+    print("Testing regular downloader...")
     downloader = AnonyigDownloader()
     try:
         results, newest_id = await downloader.download_user_stories(username, "0")
-        print(f"✅ Scraper test completed")
+        print(f"✅ Regular scraper test completed")
         print(f"   - Found {len(results)} stories")
         print(f"   - Newest ID: {newest_id}")
         
@@ -57,7 +59,59 @@ async def test_scraper(username):
             for file_path, story_id in results:
                 print(f"     • {file_path} (ID: {story_id})")
     except Exception as e:
-        print(f"❌ Scraper test failed: {e}")
+        print(f"❌ Regular scraper test failed: {e}")
+    
+    # Test concurrent downloader
+    print("\nTesting concurrent downloader...")
+    concurrent_downloader = ConcurrentDownloader(max_workers=2)
+    try:
+        profile_data = {username: "0"}
+        results_dict = await concurrent_downloader.download_multiple_profiles(profile_data)
+        
+        if username in results_dict:
+            concurrent_results, concurrent_newest_id = results_dict[username]
+            print(f"✅ Concurrent scraper test completed")
+            print(f"   - Found {len(concurrent_results)} stories")
+            print(f"   - Newest ID: {concurrent_newest_id}")
+            
+            if concurrent_results:
+                print("   - Downloaded files:")
+                for file_path, story_id in concurrent_results:
+                    print(f"     • {file_path} (ID: {story_id})")
+        else:
+            print(f"❌ No results found for {username} in concurrent test")
+    except Exception as e:
+        print(f"❌ Concurrent scraper test failed: {e}")
+
+async def test_multiple_profiles(usernames):
+    """Test the concurrent downloader with multiple profiles."""
+    print(f"🧪 Testing concurrent downloader with {len(usernames)} profiles: {', '.join(usernames)}")
+    
+    sys.path.append('src')
+    from src.downloader import ConcurrentDownloader
+    import time
+    
+    concurrent_downloader = ConcurrentDownloader(max_workers=3)
+    
+    # Prepare profile data
+    profile_data = {username: "0" for username in usernames}
+    
+    try:
+        start_time = time.time()
+        results_dict = await concurrent_downloader.download_multiple_profiles(profile_data)
+        end_time = time.time()
+        
+        print(f"✅ Concurrent test completed in {end_time - start_time:.2f} seconds")
+        
+        total_stories = 0
+        for username, (stories, newest_id) in results_dict.items():
+            print(f"   - {username}: {len(stories)} stories (newest ID: {newest_id})")
+            total_stories += len(stories)
+        
+        print(f"   - Total stories downloaded: {total_stories}")
+        
+    except Exception as e:
+        print(f"❌ Concurrent multiple profiles test failed: {e}")
 
 def run_bot():
     """Run the main bot."""
