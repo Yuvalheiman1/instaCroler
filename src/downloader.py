@@ -156,45 +156,32 @@ class AnonyigDownloader:
         profile_logger.info(f"Last known ID: {last_seen_story_id}, Initial ID to check: {initial_id_to_check}")
 
         async with async_playwright() as p:
-            # Optimize browser for constrained environments (reduced memory usage)
+            # Simplified browser arguments for better performance
             browser_args = [
                 '--disable-web-security', 
                 '--disable-features=VizDisplayCompositor',
-                '--disable-background-networking',
-                '--disable-background-timer-throttling',
-                '--disable-renderer-backgrounding',
-                '--disable-backgrounding-occluded-windows',
                 '--disable-dev-shm-usage',
                 '--no-sandbox',
                 '--disable-gpu',
-                '--memory-pressure-off',
-                '--disable-extensions',
-                '--disable-plugins'
+                '--disable-extensions'
             ]
-            
-            # Additional conservative args for stability
-            if Config.DOWNLOAD_SETTINGS.get('slow_connection_mode', False):
-                browser_args.extend([
-                    '--aggressive-cache-discard',
-                    '--disable-background-mode'
-                ])
             
             browser = await p.chromium.launch(
                 headless=True,
                 args=browser_args
             )
+            # Setup simplified browser context
             context = await browser.new_context(
                 record_video_dir=Config.DIRECTORIES['debug_videos'], 
                 viewport={'width': 1280, 'height': 720}
             )
             
-            # Block ads and tracking to prevent interference
+            # Block unnecessary resources to improve performance
             await context.route("**/*", lambda route: (
                 route.abort() if route.request.resource_type in ["image", "media", "font"] and 
                 any(ad_domain in route.request.url for ad_domain in [
                     "googlesyndication.com", "googleadservices.com", "doubleclick.net",
-                    "googletagmanager.com", "google-analytics.com", "facebook.com/tr",
-                    "ads", "analytics", "tracking", "advertisement"
+                    "googletagmanager.com", "google-analytics.com"
                 ]) else route.continue_()
             ))
             
@@ -234,26 +221,67 @@ class AnonyigDownloader:
                     profile_logger.info("Pressed Enter to search.")
                     await page.wait_for_timeout(Config.TIMEOUTS['search_delay'])
                     
-                    # Check if search worked by looking for URL change or content change
-                    current_url = page.url
-                    profile_logger.info(f"URL after search: {current_url}")
+                    # Since this is a single-page app, the URL won't change
+                    # Instead, check if content has been updated to show profile results
+                    profile_logger.info("Waiting for search results to load...")
+                    await page.wait_for_timeout(3000)  # Give JS time to update the page
                     
-                    # Wait a bit more and check if we're on a profile page
-                    await page.wait_for_timeout(2000)
-                    final_url = page.url
-                    profile_logger.info(f"Final URL: {final_url}")
+                    # Try to find and click on the profile in search results first
+                    profile_found = False
+                    profile_result_selectors = [
+                        f"a:has-text('{username}')",
+                        f"a[href*='/{username}']",
+                        f".search-results-item:has-text('{username}')",
+                        f".user-item:has-text('{username}')"
+                    ]
                     
-                    # If URL did not change, navigate directly to the user's profile page
-                    if final_url == Config.BASE_URL:
-                        profile_logger.warning("URL did not change after search. Navigating directly to profile page.")
-                        direct_url = f"https://anonyig.com/en/profile/{username}"
-                        profile_logger.info(f"Navigating to: {direct_url}")
-                        await page.goto(direct_url, timeout=Config.TIMEOUTS['page_load'], wait_until='domcontentloaded')
-                        await page.wait_for_timeout(2000)
-                        final_url = page.url
-                        profile_logger.info(f"URL after direct navigation: {final_url}")
-                    elif username.lower() in final_url.lower() or current_url != final_url:
-                        profile_logger.info("Search appears to have worked - URL changed or contains username")
+                    for selector in profile_result_selectors:
+                        try:
+                            profile_logger.debug(f"Looking for profile in search results: {selector}")
+                            profile_element = await page.query_selector(selector)
+                            if profile_element:
+                                profile_logger.info(f"Found profile in search results with selector: {selector}")
+                                # Check if element is visible before clicking
+                                if await profile_element.is_visible():
+                                    await profile_element.click()
+                                    await page.wait_for_timeout(3000)  # Wait for profile page to load
+                                    profile_found = True
+                                    profile_logger.info("Successfully clicked on profile in search results")
+                                    break
+                        except Exception as result_error:
+                            profile_logger.debug(f"Failed to click profile result with selector {selector}: {result_error}")
+                    
+                    # Simplified profile content check
+                    profile_content_found = False
+                    profile_selectors = [
+                        '.profile-header', 
+                        '.profile-content',
+                        '.tabs-component',
+                        f'[data-username="{username}"]'
+                    ]
+                    
+                    for selector in profile_selectors:
+                        try:
+                            profile_element = await page.query_selector(selector)
+                            if profile_element:
+                                profile_logger.info(f"Found profile content with selector: {selector}")
+                                profile_content_found = True
+                                break
+                        except Exception:
+                            pass
+                    
+                    # Check if page text contains the username
+                    if not profile_content_found:
+                        try:
+                            page_text = await page.text_content('body')
+                            if username.lower() in page_text.lower():
+                                profile_logger.info(f"Found username '{username}' in page text, assuming search worked")
+                                profile_content_found = True
+                        except Exception as text_error:
+                            profile_logger.debug(f"Error checking page text: {text_error}")
+                    
+                    if profile_content_found:
+                        profile_logger.info("Search appears to have worked - profile content found")
                     else:
                         profile_logger.warning("Search may not have worked - trying alternative approach")
                         # Try clicking search button if it exists
@@ -273,18 +301,13 @@ class AnonyigDownloader:
                 profile_logger.info("Clicking stories tab button...")
                 stories_tab_found = False
                 
-                # Try multiple approaches to find and click the stories tab
+                # Simplified stories tab selectors
                 stories_tab_selectors = [
-                    'button.tabs-component__button.tabs-component__button--active[type="button"]',
                     'button.tabs-component__button[type="button"]',
                     'button:has-text("stories")',
                     'button:has-text("Stories")',
-                    'button:has-text("STORIES")',
-                    '.tabs-component__button:has-text("stories")',
-                    '.tab-button',
                     '[data-tab="stories"]',
-                    'a[href*="stories"]',
-                    'button[role="tab"]'
+                    'a[href*="stories"]'
                 ]
                 
                 for selector in stories_tab_selectors:
@@ -293,8 +316,7 @@ class AnonyigDownloader:
                         stories_tab = await page.wait_for_selector(selector, timeout=5000)
                         if stories_tab:
                             # Check if it's visible and clickable
-                            is_visible = await stories_tab.is_visible()
-                            if is_visible:
+                            if await stories_tab.is_visible():
                                 await stories_tab.click()
                                 profile_logger.info(f"Stories tab clicked using selector: {selector}")
                                 await page.wait_for_timeout(Config.TIMEOUTS['stories_tab_delay'])
@@ -335,25 +357,22 @@ class AnonyigDownloader:
                             except Exception:
                                 pass
 
-                # Wait for stories container to appear
+                # Wait for stories container with simplified approach
                 profile_logger.info("Waiting for stories container to appear...")
                 container_found = False
                 
-                # Try multiple selectors for the stories container with shorter timeouts
+                # Simplified container selectors
                 container_selectors = [
                     Config.SELECTORS['stories_container'],  # '.output-profile'
                     '.profile-content',
-                    '.user-profile', 
                     'ul.profile-media-list',
-                    '.media-container',
-                    '.stories-container',
-                    '.profile-media'
+                    '.stories-container'
                 ]
                 
                 for selector in container_selectors:
                     try:
                         profile_logger.debug(f"Trying container selector: {selector}")
-                        await page.wait_for_selector(selector, timeout=10000)  # Shorter timeout per selector
+                        await page.wait_for_selector(selector, timeout=8000)  # Shorter timeout
                         profile_logger.info(f"Found stories container with: {selector}")
                         container_found = True
                         break
@@ -403,20 +422,15 @@ class AnonyigDownloader:
                     except Exception as tab_container_error:
                         profile_logger.debug(f"Error finding tabs container: {tab_container_error}")
                 
-                # Collect all story items - try multiple selectors
+                # Simplified story selectors
                 story_items = []
                 story_selectors = [
                     Config.SELECTORS['story_items'],  # 'ul.profile-media-list > li.profile-media-list__item'
                     'ul.profile-media-list > li',
                     '.profile-media-list__item',
                     '.story-item',
-                    '.media-item',
-                    'li[data-media]',
                     'li:has(.button__download)',
                     'li:has(a[href*="download"])',
-                    '.media-content',
-                    '.profile-media-list__item',
-                    '.tabs-component-panels [class*="story"]',
                     'li:has(img)',
                     'li:has(video)'
                 ]
@@ -435,47 +449,43 @@ class AnonyigDownloader:
                 profile_logger.info(f"Total stories found for {username}: {len(story_items)}")
                 
                 if len(story_items) == 0:
-                    profile_logger.warning("No stories found. Performing comprehensive page analysis...")
+                    profile_logger.warning("No stories found. Trying alternative search approach...")
                     
-                    # Check page URL to ensure we're on the right page
-                    current_url = page.url
-                    profile_logger.info(f"Current page URL: {current_url}")
-                    
-                    # Try clicking all possible tab-like elements to find stories
-                    profile_logger.info("Trying to click on any possible tab elements...")
-                    tab_elements = await page.query_selector_all('button, .tab, [role="tab"], .tabs-component__button')
-                    for tab in tab_elements:
-                        try:
-                            tab_text = await tab.text_content()
-                            profile_logger.info(f"Found potential tab with text: {tab_text}")
-                            if "stor" in tab_text.lower():
-                                profile_logger.info(f"Clicking tab with text: {tab_text}")
-                                await tab.click()
-                                await page.wait_for_timeout(2000)
-                                
-                                # Check if stories appeared after clicking
-                                story_container_check = await page.query_selector_all('ul.profile-media-list, .profile-media-list, .media-list')
-                                if story_container_check:
-                                    profile_logger.info(f"Found story container after clicking tab: {tab_text}")
-                                    await page.wait_for_timeout(1000)
-                                    # Try to find stories again
-                                    for selector in story_selectors:
-                                        items = await page.query_selector_all(selector)
-                                        if items:
-                                            story_items = items
-                                            profile_logger.info(f"Found {len(story_items)} stories after clicking tab")
-                                            break
-                                    if story_items:
-                                        break
-                        except Exception as tab_click_error:
-                            profile_logger.debug(f"Error clicking tab: {tab_click_error}")
-                    
-                    # Get page title
+                    # Try clearing and searching again with different approach
                     try:
-                        page_title = await page.title()
-                        profile_logger.info(f"Page title: {page_title}")
-                    except:
-                        pass
+                        # Clear the search field and try again
+                        search_input = await page.query_selector(Config.SELECTORS['search_input'])
+                        if search_input:
+                            await search_input.fill("")  # Clear field
+                            await page.wait_for_timeout(500)
+                            await search_input.fill(username)  # Fill again
+                            await page.wait_for_timeout(500)
+                            
+                            # Try clicking the search button instead of pressing Enter
+                            search_btn = await page.query_selector('button[type="submit"], .search-btn, input[type="submit"]')
+                            if search_btn:
+                                profile_logger.info("Found search button, clicking instead of pressing Enter...")
+                                await search_btn.click()
+                                await page.wait_for_timeout(3000)
+                                
+                                # Try to find stories again
+                                for selector in story_selectors:
+                                    items = await page.query_selector_all(selector)
+                                    if items:
+                                        story_items = items
+                                        profile_logger.info(f"Found {len(story_items)} stories after second search attempt")
+                                        break
+                    except Exception as search_retry_error:
+                        profile_logger.warning(f"Second search attempt failed: {search_retry_error}")
+                    
+                    # Save a debug screenshot if we still can't find stories
+                    if len(story_items) == 0:
+                        try:
+                            screenshot_path = os.path.join(Config.DIRECTORIES['debug_videos'], f"debug_screenshot_{username}.png")
+                            await page.screenshot(path=screenshot_path, full_page=True)
+                            profile_logger.info(f"Saved debug screenshot to {screenshot_path}")
+                        except Exception as screenshot_error:
+                            profile_logger.warning(f"Failed to save screenshot: {screenshot_error}")
                     
                     # Check what's actually on the page
                     page_html = await page.content()
@@ -519,51 +529,41 @@ class AnonyigDownloader:
                     except Exception as screenshot_error:
                         profile_logger.warning(f"Failed to save screenshot: {screenshot_error}")
                     
-                    # Try alternative URL approach if direct search fails
-                    profile_logger.info("Trying alternative URL approach...")
+                    # Try clearing and searching again with different approach
+                    profile_logger.info("Trying search again with alternative approach...")
                     try:
-                        # Try navigating directly to user's page
-                        direct_url = f"https://anonyig.com/en/profile/{username}"
-                        profile_logger.info(f"Trying direct URL: {direct_url}")
-                        await page.goto(direct_url, timeout=Config.TIMEOUTS['page_load'], wait_until='domcontentloaded')
-                        await page.wait_for_timeout(3000)
-                        
-                        # Try to find stories again
-                        items = await page.query_selector_all(Config.SELECTORS['story_items'])
-                        if items:
-                            story_items = items
-                            profile_logger.info(f"Found {len(story_items)} stories via direct URL")
+                        # Clear the search field and try again
+                        search_input = await page.query_selector(Config.SELECTORS['search_input'])
+                        if search_input:
+                            await search_input.fill("")  # Clear field
+                            await page.wait_for_timeout(500)
+                            await search_input.fill(username)  # Fill again
+                            await page.wait_for_timeout(500)
+                            
+                            # Try clicking the search button instead of pressing Enter
+                            search_btn = await page.query_selector('button[type="submit"], .search-btn, input[type="submit"], .search-form__button')
+                            if search_btn:
+                                profile_logger.info("Found search button, clicking instead of pressing Enter...")
+                                await search_btn.click()
+                                await page.wait_for_timeout(3000)
                                 
-                    except Exception as direct_error:
-                        profile_logger.warning(f"Direct URL approach failed: {direct_error}")
+                                # Try to find stories again
+                                items = await page.query_selector_all(Config.SELECTORS['story_items'])
+                                if items:
+                                    story_items = items
+                                    profile_logger.info(f"Found {len(story_items)} stories after second search attempt")
+                        else:
+                            profile_logger.warning("Could not find search input for second attempt")
+                                
+                    except Exception as search_retry_error:
+                        profile_logger.warning(f"Second search attempt failed: {search_retry_error}")
                 
-                    # If still no stories, try more approaches
+                    # If still no stories, try simplified fallback approach
                 if len(story_items) == 0:
                     profile_logger.info("Trying to find any media elements as fallback...")
                     
-                    # Debug the page structure to understand what's happening
-                    profile_logger.info("Examining DOM structure for insight...")
-                    structure_elements = await page.evaluate('''() => {
-                        const result = [];
-                        // Find elements that likely contain media or content
-                        const containers = document.querySelectorAll('.tabs-component-panels, .profile-content, .media-content, [class*="story"], [class*="media"]');
-                        for (const container of containers) {
-                            result.push({
-                                className: container.className,
-                                childrenCount: container.children.length,
-                                hasMedia: container.querySelector('img, video, a[href*=".mp4"], a[href*=".jpg"]') !== null
-                            });
-                        }
-                        return result;
-                    }''')
-                    
-                    if structure_elements:
-                        profile_logger.info(f"Found {len(structure_elements)} potential content containers")
-                        for i, el in enumerate(structure_elements):
-                            profile_logger.debug(f"Container {i+1}: class={el.get('className', 'unknown')}, children={el.get('childrenCount', 0)}, has media={el.get('hasMedia', False)}")
-                    
-                    # Look for any media elements that might be stories
-                    media_elements = await page.query_selector_all('img[src*="instagram"], video[src*="instagram"], a[href*=".mp4"], a[href*=".jpg"], .media-content')
+                    # Look for any media elements or download links directly
+                    media_elements = await page.query_selector_all('a[href*=".mp4"], a[href*=".jpg"], img, video, .media-content')
                     if media_elements:
                         profile_logger.info(f"Found {len(media_elements)} potential media elements as fallback")
                         # We'll process these as story items
