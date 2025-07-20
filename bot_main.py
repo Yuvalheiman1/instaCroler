@@ -102,7 +102,14 @@ class InstagramStoryBot:
             "• Use /menu for quick actions with buttons\n"
             "• Check /status to see current bot state\n"
         )
-        await update.message.reply_text(help_msg, parse_mode=ParseMode.HTML)
+        
+        # Handle both direct message commands and callback queries from buttons
+        if hasattr(update, 'callback_query') and update.callback_query:
+            # Called from button press
+            await update.callback_query.message.reply_text(help_msg, parse_mode=ParseMode.HTML)
+        else:
+            # Called from direct command
+            await update.message.reply_text(help_msg, parse_mode=ParseMode.HTML)
     
     async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /status command - show bot status and statistics."""
@@ -118,7 +125,13 @@ class InstagramStoryBot:
             f"• <b>Monitored Chats:</b> {len(profiles_data)}\n"
         )
         
-        await update.message.reply_text(status_msg, parse_mode=ParseMode.HTML)
+        # Handle both direct message commands and callback queries from buttons
+        if hasattr(update, 'callback_query') and update.callback_query:
+            # Called from button press
+            await update.callback_query.message.reply_text(status_msg, parse_mode=ParseMode.HTML)
+        else:
+            # Called from direct command
+            await update.message.reply_text(status_msg, parse_mode=ParseMode.HTML)
     
     async def cmd_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show an interactive menu."""
@@ -140,7 +153,15 @@ class InstagramStoryBot:
     
     async def cmd_refresh(self, update: Update, context: ContextTypes.DEFAULT_TYPE, reply_message=None):
         """Handle /refresh command - manually trigger story check."""
-        target = reply_message if reply_message else update.message
+        # Handle both direct message commands and callback queries from buttons
+        if reply_message:
+            target = reply_message
+        elif hasattr(update, 'callback_query') and update.callback_query:
+            # Called from button press
+            target = update.callback_query.message
+        else:
+            # Called from direct command
+            target = update.message
         
         if self.scraper_running:
             await target.reply_text("🔄 Scraper is already running. Please wait...")
@@ -172,11 +193,20 @@ class InstagramStoryBot:
 
     async def cmd_list_profiles(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /list_profiles command."""
-        chat_id = str(update.message.chat_id)
+        # Handle both direct message commands and callback queries from buttons
+        if hasattr(update, 'callback_query') and update.callback_query:
+            # Called from button press
+            chat_id = str(update.callback_query.message.chat_id)
+            message_to_reply = update.callback_query.message
+        else:
+            # Called from direct command
+            chat_id = str(update.message.chat_id)
+            message_to_reply = update.message
+            
         profiles = self.db.get_all_profiles().get(chat_id, {})
         
         if not profiles:
-            await update.message.reply_text("No profiles are being monitored for this chat.")
+            await message_to_reply.reply_text("No profiles are being monitored for this chat.")
             return
             
         message = "<b>Monitored Profiles:</b>\n"
@@ -184,7 +214,7 @@ class InstagramStoryBot:
             last_story_id = data.get('last_story_id', 'N/A')
             message += f"- <code>{username}</code> (Last story: {last_story_id})\n"
             
-        await update.message.reply_text(message, parse_mode=ParseMode.HTML)
+        await message_to_reply.reply_text(message, parse_mode=ParseMode.HTML)
 
     async def cmd_add_profile(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /add_profile command."""
@@ -242,7 +272,7 @@ class InstagramStoryBot:
         command = query.data
 
         if command == 'status':
-            await self.cmd_status(query, context)
+            await self.cmd_status(update, context)
         elif command == 'add_profile_prompt':
             await query.message.reply_text("Please type the username you want to add.")
             context.user_data['next_action'] = 'add_profile'
@@ -250,9 +280,8 @@ class InstagramStoryBot:
             await query.message.reply_text("Please type the username you want to remove.")
             context.user_data['next_action'] = 'remove_profile'
         elif command == 'list_profiles':
-            # The query object from a button press doesn't have a `message` attribute directly
-            # We need to use query.message to call the command handler
-            await self.cmd_list_profiles(query.message, context)
+            # Pass the entire update object to the command handler
+            await self.cmd_list_profiles(update, context)
         elif command == 'pause':
             self.db.pause()
             await query.edit_message_text(text="✅ Automatic scraping has been paused.")
@@ -260,7 +289,7 @@ class InstagramStoryBot:
             self.db.resume()
             await query.edit_message_text(text="▶️ Automatic scraping has been resumed.")
         elif command == 'refresh':
-            await self.cmd_refresh(query, context)
+            await self.cmd_refresh(update, context)
 
     async def text_reply_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle text replies for adding/removing profiles after a prompt."""
