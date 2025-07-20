@@ -156,19 +156,22 @@ class InstagramStoryBot:
         # Handle both direct message commands and callback queries from buttons
         if reply_message:
             target = reply_message
+            chat_id = target.chat_id
         elif hasattr(update, 'callback_query') and update.callback_query:
             # Called from button press
             target = update.callback_query.message
+            chat_id = target.chat_id
         else:
             # Called from direct command
             target = update.message
+            chat_id = target.chat_id
         
         if self.scraper_running:
             await target.reply_text("🔄 Scraper is already running. Please wait...")
             return
         
         profiles_data = self.db.get_all_profiles()
-        profiles = profiles_data.get(str(self.chat_id), [])
+        profiles = profiles_data.get(str(chat_id), [])
         
         if not profiles:
             await target.reply_text("📝 No profiles to check. Add some profiles first using /add_profile.")
@@ -176,8 +179,8 @@ class InstagramStoryBot:
         
         await target.reply_text(f"🔄 Starting manual check for {len(profiles)} profiles...")
         
-        # Trigger external scraper script
-        self._trigger_external_scraper()
+        # Use the existing run_scraper_manually method
+        await self.run_scraper_manually(chat_id)
     
     async def cmd_pause(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /pause command."""
