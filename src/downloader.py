@@ -243,8 +243,16 @@ class AnonyigDownloader:
                     final_url = page.url
                     profile_logger.info(f"Final URL: {final_url}")
                     
-                    # Check if URL changed or if we found profile content
-                    if username.lower() in final_url.lower() or current_url != final_url:
+                    # If URL did not change, navigate directly to the user's profile page
+                    if final_url == Config.BASE_URL:
+                        profile_logger.warning("URL did not change after search. Navigating directly to profile page.")
+                        direct_url = f"https://anonyig.com/en/profile/{username}"
+                        profile_logger.info(f"Navigating to: {direct_url}")
+                        await page.goto(direct_url, timeout=Config.TIMEOUTS['page_load'], wait_until='domcontentloaded')
+                        await page.wait_for_timeout(2000)
+                        final_url = page.url
+                        profile_logger.info(f"URL after direct navigation: {final_url}")
+                    elif username.lower() in final_url.lower() or current_url != final_url:
                         profile_logger.info("Search appears to have worked - URL changed or contains username")
                     else:
                         profile_logger.warning("Search may not have worked - trying alternative approach")
@@ -267,9 +275,10 @@ class AnonyigDownloader:
                 
                 # Try multiple approaches to find and click the stories tab
                 stories_tab_selectors = [
-                    Config.SELECTORS['stories_tab'],  # 'button.tabs-component__button:has-text("stories")'
+                    'button.tabs-component__button.tabs-component__button--active[type="button"]',
+                    'button.tabs-component__button[type="button"]',
+                    'button:has-text("stories")',
                     'button:has-text("Stories")',
-                    'button:has-text("stories")', 
                     'button:has-text("STORIES")',
                     '.tabs-component__button:has-text("stories")',
                     '.tab-button',
@@ -302,16 +311,29 @@ class AnonyigDownloader:
                     if existing_stories:
                         profile_logger.info(f"Found {len(existing_stories)} stories already visible, proceeding without tab click")
                     else:
-                        # Try direct navigation to stories section
-                        try:
-                            current_url = page.url
-                            if not current_url.endswith('/stories'):
-                                stories_url = current_url.rstrip('/') + '/stories'
-                                profile_logger.info(f"Trying direct navigation to: {stories_url}")
-                                await page.goto(stories_url, timeout=15000)
-                                await page.wait_for_timeout(2000)
-                        except Exception as nav_error:
-                            profile_logger.warning(f"Direct navigation failed: {nav_error}")
+                        # Look for any container that might have stories in it
+                        profile_logger.info("Looking for any stories content without navigation...")
+                        await page.wait_for_timeout(2000)  # Wait for any delayed content to load
+                        
+                        # Try to find any story-like content
+                        potential_selectors = [
+                            'ul.profile-media-list',
+                            '.profile-media-list',
+                            '.media-list',
+                            '.story-list',
+                            '.output-profile',
+                            '.profile-content',
+                            '[data-tab-content="stories"]'
+                        ]
+                        
+                        for selector in potential_selectors:
+                            try:
+                                content = await page.query_selector(selector)
+                                if content:
+                                    profile_logger.info(f"Found potential stories container with selector: {selector}")
+                                    break
+                            except Exception:
+                                pass
 
                 # Wait for stories container to appear
                 profile_logger.info("Waiting for stories container to appear...")
