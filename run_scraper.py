@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Optional
 from dotenv import load_dotenv
 from telegram import Bot
+from telegram import error as telegram_error
 
 # Load environment variables FIRST
 load_dotenv()
@@ -374,7 +375,23 @@ async def main():
     except Exception as e:
         scraper.logger.critical(f"A critical error occurred: {e}")
     finally:
-        await scraper.bot.close()
+        # Try to close the bot with retry logic
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                await scraper.bot.close()
+                break
+            except telegram_error.RetryAfter as e:
+                if attempt < max_attempts - 1:
+                    retry_seconds = getattr(e, 'retry_after', 10)
+                    scraper.logger.warning(f"Telegram flood control exceeded. Waiting {retry_seconds} seconds before retry...")
+                    await asyncio.sleep(retry_seconds)
+                else:
+                    scraper.logger.error(f"Failed to close Telegram bot after {max_attempts} attempts: {e}")
+            except Exception as e:
+                scraper.logger.error(f"Error closing Telegram bot: {e}")
+                break
+        
         scraper.logger.info("Scraper run finished.")
 
 if __name__ == "__main__":

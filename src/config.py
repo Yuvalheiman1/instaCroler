@@ -16,19 +16,21 @@ class Config:
         'download_button': '.button.button--filled.button__download',
         'media_content': '.media-content, .profile-media-list__item img, .profile-media-list__item video',
         'media_container': '.media-content',
-        'lazy_load_triggers': '.hide-content__btn, .load-more-btn, .trigger'
+        'lazy_load_triggers': '.hide-content__btn, .load-more-btn, .trigger',
+        'download_link': 'a.button__download[href]'
     }
     
     # Timeouts and delays (in milliseconds)
     TIMEOUTS = {
-        'page_load': 45000,         # Reduced from 60s to 45s
+        'page_load': 30000,         # Reduced from 60s to 45s
         'element_wait': 20000,      # Reduced from 30s to 20s
         'search_delay': 1500,
         'stories_tab_delay': 1200,
         'scroll_delay': 1200,
         'download_delay': 500,
         'retry_base_delay': 1000,
-        'browser_launch_delay': 5000
+        'browser_launch_delay': 5000,
+        'download': 30000           # 30 seconds for file downloads
     }
     
     # Download settings
@@ -41,7 +43,9 @@ class Config:
         'max_concurrent_downloads': 2,  # Also reduced to be safer
         'enable_concurrent': True,
         'browser_launch_stagger': True,
-        'slow_connection_mode': False
+        'slow_connection_mode': False,
+        'enable_debug_video': True,  # Set to True to record browser sessions for debugging
+        'debug_video_quality': 'high'  # Can be 'low', 'medium', or 'high'
     }
     
     # File extensions

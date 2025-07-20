@@ -1,44 +1,49 @@
 import os
+import asyncio
 import requests
 import time
-import asyncio
-from typing import Optional, List, Tuple, Dict
+import shutil
 from datetime import datetime
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, Page, BrowserContext, Browser
+from typing import Optional, List, Tuple, Dict
 from .config import Config
 from .logger import get_logger, get_profile_logger
 
 class AnonyigDownloader:
     """
-    A class to download Instagram stories anonymously using a website.
-    It uses Playwright for browser automation and combines the best logic
-    from both the old downloader and the copy version.
+    A class to scrape Instagram stories anonymously using anonyig.com via Playwright.
     """
     def __init__(self):
         """Initializes the downloader."""
         self.logger = get_logger()
         self.logger.info("AnonyigDownloader initialized")
+        # Ensure download and debug directories exist
+        os.makedirs(Config.DIRECTORIES['downloads'], exist_ok=True)
+        os.makedirs(Config.DIRECTORIES['debug_videos'], exist_ok=True)
 
     def _extract_story_id(self, data_id: str) -> str:
         """
         Uses the data-id attribute as the unique story ID.
+        If data_id is None or missing, tries to generate a timestamp-based ID.
         """
+        if not data_id or data_id == "None":
+            # Generate a timestamp-based ID if no data-id is available
+            timestamp = int(time.time())
+            return f"ts_{timestamp}_{hash(str(timestamp))}"[:20]
         return str(data_id)
 
-    async def _load_all_stories(self, page):
+    async def _load_all_stories(self, page: Page) -> int:
         """
-        Scroll and trigger lazy loading to ensure all stories are loaded.
+        Performs lazy scrolling and triggers to load all available stories.
+        Returns the total count of stories found after lazy loading.
         """
         self.logger.info("Starting lazy loading process...")
-        last_count = 0
-        max_attempts = Config.DOWNLOAD_SETTINGS['max_lazy_load_attempts']
-        scroll_delay = Config.TIMEOUTS['scroll_delay']
+        last_story_count = 0
         
-        # Add timeout to prevent hanging
         start_time = time.time()
-        max_lazy_load_time = 60  # Maximum 60 seconds for lazy loading
-        
-        for attempt in range(max_attempts):
+        max_lazy_load_time = 60 # Max 60 seconds for lazy loading attempts
+
+        for attempt in range(Config.DOWNLOAD_SETTINGS['max_lazy_load_attempts']):
             # Check timeout
             if time.time() - start_time > max_lazy_load_time:
                 self.logger.warning(f"Lazy loading timeout after {max_lazy_load_time} seconds")
@@ -54,46 +59,116 @@ class AnonyigDownloader:
             
             self.logger.debug(f"Lazy load attempt {attempt + 1}: {current_count} stories found")
             
-            if current_count == last_count and attempt > 2:
+            # Stop if no new stories after several attempts
+            if current_count == last_story_count and attempt > 2:
                 self.logger.info("No new stories loaded, stopping lazy loading")
                 break
                 
-            last_count = current_count
+            last_story_count = current_count
             
             # Scroll to bottom of stories container
             try:
+                # Try to scroll the specific container first
                 stories_container = await page.query_selector('ul.profile-media-list')
                 if stories_container:
                     await page.evaluate('el => el.scrollTop = el.scrollHeight', stories_container)
+                else:
+                    # Fallback to scrolling the whole page
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 
                 # Look for and trigger lazy load elements
                 lazy_triggers = await page.query_selector_all(Config.SELECTORS['lazy_load_triggers'])
                 for trigger in lazy_triggers:
                     try:
-                        await trigger.hover()
-                        await trigger.focus()
-                        await page.wait_for_timeout(500)
-                    except:
-                        pass
+                        if await trigger.is_visible():
+                            await trigger.click(timeout=1000)
+                            await page.wait_for_timeout(200)
+                        else:
+                            await trigger.hover()
+                            await trigger.focus()
+                    except Exception:
+                        pass # Ignore if trigger interaction fails
                         
             except Exception as e:
                 self.logger.warning(f"Scroll attempt {attempt + 1} failed: {e}")
             
-            await page.wait_for_timeout(scroll_delay)
+            await page.wait_for_timeout(Config.TIMEOUTS['scroll_delay'])
         
         try:
-            final_count = len(await page.query_selector_all(Config.SELECTORS['story_items']))
+            final_stories = await page.query_selector_all(Config.SELECTORS['story_items'])
+            final_count = len(final_stories)
             self.logger.info(f"Lazy loading complete. Final story count: {final_count}")
+            return final_count
         except Exception as final_count_error:
             self.logger.warning(f"Error getting final count: {final_count_error}")
             self.logger.info("Lazy loading complete (count unknown)")
+            return last_story_count
+
+    def _download_file(self, url: str, save_path: str) -> bool:
+        """
+        Helper to download a file from a URL.
+        Enhanced with better error handling and diagnostics.
+        """
+        try:
+            # Use a longer timeout for downloads
+            headers = {
+                'User-Agent': Config.DOWNLOAD_SETTINGS['user_agent'],
+                'Accept': '*/*',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Referer': Config.BASE_URL
+            }
+            
+            response = requests.get(
+                url, 
+                stream=True, 
+                timeout=Config.TIMEOUTS.get('download', 30),
+                headers=headers,
+                allow_redirects=True
+            )
+            
+            # Log response details for debugging
+            self.logger.debug(f"Download response status: {response.status_code}, headers: {response.headers}")
+            
+            response.raise_for_status()
+            
+            # Check content type and size
+            content_type = response.headers.get('Content-Type', '')
+            content_length = int(response.headers.get('Content-Length', 0))
+            
+            if content_length == 0:
+                self.logger.warning(f"Zero content length for {url}")
+                return False
+                
+            if 'text/html' in content_type:
+                self.logger.warning(f"Received HTML instead of media file for {url}")
+                return False
+            
+            # Download the file
+            with open(save_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=Config.DOWNLOAD_SETTINGS['chunk_size']):
+                    if chunk:
+                        f.write(chunk)
+            
+            # Verify file was created successfully
+            if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
+                self.logger.debug(f"Successfully downloaded {url} to {save_path} ({os.path.getsize(save_path)} bytes)")
+                return True
+            else:
+                self.logger.error(f"Downloaded file is empty or missing: {save_path}")
+                return False
+                
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Download failed for {url}: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Unexpected error downloading {url}: {e}")
+            return False
 
     async def _download_with_retry(self, url: str, save_path: str, profile_logger, max_retries: int = 3) -> bool:
         """
         Download file with exponential backoff retry mechanism.
         """
-        import asyncio
-        
         for attempt in range(max_retries):
             try:
                 if self._download_file(url, save_path):
@@ -104,712 +179,333 @@ class AnonyigDownloader:
                         profile_logger.warning(f"Download failed, retrying in {wait_time}ms...")
                         await asyncio.sleep(wait_time / 1000)
             except Exception as e:
+                profile_logger.error(f"Error during download attempt {attempt + 1}: {e}")
                 if attempt < max_retries - 1:
                     wait_time = (2 ** attempt) * 1000
-                    profile_logger.warning(f"Download error: {e}, retrying in {wait_time}ms...")
+                    profile_logger.warning(f"Retrying in {wait_time}ms...")
                     await asyncio.sleep(wait_time / 1000)
-                else:
-                    profile_logger.error(f"Download failed after {max_retries} attempts: {e}")
+        profile_logger.error(f"Failed to download {url} after {max_retries} attempts.")
         return False
 
-    def _download_file(self, url: str, save_path: str) -> bool:
+    async def download_stories(self, username: str, last_seen_story_id: Optional[str] = None):
         """
-        Downloads a file from a URL and saves it to a given path.
+        Downloads stories for a given username.
+        Yields (username, file_path, story_id) for each new story.
+        Returns the newest story ID found.
         """
-        try:
-            headers = {'User-Agent': Config.DOWNLOAD_SETTINGS['user_agent']}
-            with requests.get(url, stream=True, headers=headers) as response:
-                response.raise_for_status()
-                with open(save_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=Config.DOWNLOAD_SETTINGS['chunk_size']):
-                        f.write(chunk)
-            self.logger.info(f"Successfully downloaded file: {save_path}")
-            return True
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Failed to download file from {url}. Error: {e}")
-            return False
-
-    async def download_user_stories(self, username: str, last_seen_story_id: str = None):
-        """
-        Scrapes and downloads new stories (images and videos) for a given Instagram user from anonyig.com.
-        Returns a list of (file_path, story_id) and the newest story_id found.
-        
-        This method combines the reliable Playwright logic from old_downloader with 
-        the Redis-compatible interface from downloader copy.
-        """
-        # Create profile-specific logger
         profile_logger = get_profile_logger(username)
-        
-        results = []
-        newest_id_found = last_seen_story_id or "0"
-        user_dir = os.path.join(Config.DIRECTORIES['downloads'], username)
-        os.makedirs(user_dir, exist_ok=True)
-        os.makedirs(Config.DIRECTORIES['debug_videos'], exist_ok=True)
+        profile_logger.info(f"Starting download for profile: {username}")
+        newest_story_id = last_seen_story_id
 
-        # Extract timestamp from last_seen_story_id (format: "timestamp_index")
-        if last_seen_story_id and "_" in last_seen_story_id:
-            initial_id_to_check = int(last_seen_story_id.split("_")[0])
-        else:
-            initial_id_to_check = int(last_seen_story_id or "0")
-        
-        profile_logger.info(f"Starting story download for user: {username}")
-        profile_logger.info(f"Last known ID: {last_seen_story_id}, Initial ID to check: {initial_id_to_check}")
+        # Create user-specific download directory
+        download_dir = os.path.join(Config.DIRECTORIES['downloads'], username)
+        os.makedirs(download_dir, exist_ok=True)
 
-        async with async_playwright() as p:
-            # Simplified browser arguments for better performance
-            browser_args = [
-                '--disable-web-security', 
-                '--disable-features=VizDisplayCompositor',
-                '--disable-dev-shm-usage',
-                '--no-sandbox',
-                '--disable-gpu',
-                '--disable-extensions'
-            ]
-            
-            browser = await p.chromium.launch(
-                headless=True,
-                args=browser_args
-            )
-            # Setup simplified browser context
-            context = await browser.new_context(
-                record_video_dir=Config.DIRECTORIES['debug_videos'], 
-                viewport={'width': 1280, 'height': 720}
-            )
-            
-            # Block unnecessary resources to improve performance
-            await context.route("**/*", lambda route: (
-                route.abort() if route.request.resource_type in ["image", "media", "font"] and 
-                any(ad_domain in route.request.url for ad_domain in [
-                    "googlesyndication.com", "googleadservices.com", "doubleclick.net",
-                    "googletagmanager.com", "google-analytics.com"
-                ]) else route.continue_()
-            ))
-            
-            page = await context.new_page()
-            
-            # Add page crash handler
-            page.on("crash", lambda: profile_logger.error(f"Page crashed for {username}"))
-            
-            profile_logger.info("Browser started, recording video...")
-            
-            try:
-                url = Config.BASE_URL
-                profile_logger.info(f"Visiting {url}")
+        # Ensure debug videos directory exists
+        debug_video_dir = Config.DIRECTORIES['debug_videos']
+        os.makedirs(debug_video_dir, exist_ok=True)
+
+        browser = None
+        try:
+            async with async_playwright() as p:
+                # Generate a unique debug video filename
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                debug_video_path = os.path.join(debug_video_dir, f"{username}_{timestamp}.webm")
                 
-                # Use different wait strategy for slow connections (from copy version)
-                if Config.DOWNLOAD_SETTINGS.get('slow_connection_mode', False):
-                    profile_logger.info("Using slow connection mode - waiting for 'domcontentloaded' instead of 'load'")
-                    await page.goto(url, timeout=Config.TIMEOUTS['page_load'], wait_until='domcontentloaded')
-                    # Extra wait for slow connections
-                    await page.wait_for_timeout(5000)  # Extra 5 second wait
-                else:
-                    await page.goto(url, timeout=Config.TIMEOUTS['page_load'])
-                    await page.wait_for_timeout(2000)
+                # Create browser and context - with or without video recording based on settings
+                browser = await p.chromium.launch(
+                    headless=True,  # True for production
+                    args=['--no-sandbox', '--disable-gpu']
+                )
+                
+                context_options = {
+                    'user_agent': Config.DOWNLOAD_SETTINGS['user_agent'],
+                    'viewport': {'width': 1280, 'height': 720}
+                }
+                
+                # Add video recording if enabled
+                if Config.DOWNLOAD_SETTINGS.get('enable_debug_video', False):
+                    # Set video size based on quality setting
+                    quality = Config.DOWNLOAD_SETTINGS.get('debug_video_quality', 'medium')
+                    video_size = {'width': 1280, 'height': 720}  # Default medium quality
+                    
+                    if quality == 'low':
+                        video_size = {'width': 640, 'height': 480}
+                    elif quality == 'high':
+                        video_size = {'width': 1920, 'height': 1080}
+                        
+                    context_options['record_video_dir'] = debug_video_dir
+                    context_options['record_video_size'] = video_size
+                    profile_logger.info(f"Debug video recording enabled: {debug_video_path}")
+                
+                context = await browser.new_context(**context_options)
+                page = await context.new_page()
+                page.set_default_timeout(Config.TIMEOUTS['page_load'])
 
-                # Find and fill the search input
-                profile_logger.info("Looking for search input...")
+                # 1. Load the page
+                profile_logger.info(f"Navigating to {Config.BASE_URL}")
+                await page.goto(Config.BASE_URL, timeout=Config.TIMEOUTS['page_load'])
+                await page.wait_for_load_state('domcontentloaded')
+                await page.wait_for_timeout(2000)  # Extra time for JS
+
+                # 2. Enter Username in search
+                profile_logger.info(f"Searching for username: {username}")
                 search_input = await page.wait_for_selector(
-                    Config.SELECTORS['search_input'], 
+                    Config.SELECTORS['search_input'],
                     timeout=Config.TIMEOUTS['element_wait']
                 )
-                if search_input:
-                    profile_logger.info("Found search input, filling username...")
-                    await search_input.fill(username)
-                    await page.wait_for_timeout(500)
-                    # Press Enter to search
+                
+                if not search_input:
+                    profile_logger.error("Search input not found")
+                    yield username, None, None
+                    return
+
+                await search_input.fill(username)
+                await page.wait_for_timeout(Config.TIMEOUTS['search_delay'])
+
+                # 3. Click search or press Enter
+                try:
                     await search_input.press('Enter')
-                    profile_logger.info("Pressed Enter to search.")
-                    await page.wait_for_timeout(Config.TIMEOUTS['search_delay'])
+                    await page.wait_for_timeout(1000)
                     
-                    # Since this is a single-page app, the URL won't change
-                    # Instead, check if content has been updated to show profile results
-                    profile_logger.info("Waiting for search results to load...")
-                    await page.wait_for_timeout(3000)  # Give JS time to update the page
+                    # Try clicking search button as fallback
+                    search_button = await page.query_selector('button.search-form__button')
+                    if search_button and await search_button.is_visible():
+                        await search_button.click()
                     
-                    # Try to find and click on the profile in search results first
-                    profile_found = False
-                    profile_result_selectors = [
-                        f"a:has-text('{username}')",
-                        f"a[href*='/{username}']",
-                        f".search-results-item:has-text('{username}')",
-                        f".user-item:has-text('{username}')"
-                    ]
-                    
-                    for selector in profile_result_selectors:
-                        try:
-                            profile_logger.debug(f"Looking for profile in search results: {selector}")
-                            profile_element = await page.query_selector(selector)
-                            if profile_element:
-                                profile_logger.info(f"Found profile in search results with selector: {selector}")
-                                # Check if element is visible before clicking
-                                if await profile_element.is_visible():
-                                    await profile_element.click()
-                                    await page.wait_for_timeout(3000)  # Wait for profile page to load
-                                    profile_found = True
-                                    profile_logger.info("Successfully clicked on profile in search results")
-                                    break
-                        except Exception as result_error:
-                            profile_logger.debug(f"Failed to click profile result with selector {selector}: {result_error}")
-                    
-                    # Simplified profile content check
-                    profile_content_found = False
-                    profile_selectors = [
-                        '.profile-header', 
-                        '.profile-content',
-                        '.tabs-component',
-                        f'[data-username="{username}"]'
-                    ]
-                    
-                    for selector in profile_selectors:
-                        try:
-                            profile_element = await page.query_selector(selector)
-                            if profile_element:
-                                profile_logger.info(f"Found profile content with selector: {selector}")
-                                profile_content_found = True
-                                break
-                        except Exception:
-                            pass
-                    
-                    # Check if page text contains the username
-                    if not profile_content_found:
-                        try:
-                            page_text = await page.text_content('body')
-                            if username.lower() in page_text.lower():
-                                profile_logger.info(f"Found username '{username}' in page text, assuming search worked")
-                                profile_content_found = True
-                        except Exception as text_error:
-                            profile_logger.debug(f"Error checking page text: {text_error}")
-                    
-                    if profile_content_found:
-                        profile_logger.info("Search appears to have worked - profile content found")
+                    await page.wait_for_load_state('networkidle', timeout=Config.TIMEOUTS['page_load'])
+                    profile_logger.info("Search initiated")
+                except Exception as e:
+                    profile_logger.error(f"Failed to initiate search: {e}")
+                    yield username, None, None
+                    return
+
+                # 4. Click Stories Tab if needed
+                try:
+                    stories_tab = await page.query_selector(Config.SELECTORS['stories_tab'])
+                    if stories_tab and await stories_tab.is_visible():
+                        # Check if tab is already active
+                        is_active = await stories_tab.evaluate('node => node.classList.contains("active")')
+                        if not is_active:
+                            await stories_tab.click()
+                            await page.wait_for_timeout(Config.TIMEOUTS['stories_tab_delay'])
+                            profile_logger.info("Stories tab clicked")
                     else:
-                        profile_logger.warning("Search may not have worked - trying alternative approach")
-                        # Try clicking search button if it exists
-                        try:
-                            search_btn = await page.query_selector('button[type="submit"], .search-btn, input[type="submit"]')
-                            if search_btn:
-                                profile_logger.info("Found search button, clicking...")
-                                await search_btn.click()
-                                await page.wait_for_timeout(3000)
-                        except Exception as btn_error:
-                            profile_logger.debug(f"Search button click failed: {btn_error}")
-                else:
-                    profile_logger.error("Search input not found!")
-                    return results, newest_id_found
+                        profile_logger.info("Stories tab not found or already active")
+                except Exception as e:
+                    profile_logger.warning(f"Could not interact with stories tab: {e}")
 
-                # Click the stories tab button
-                profile_logger.info("Clicking stories tab button...")
-                stories_tab_found = False
-                
-                # Simplified stories tab selectors
-                stories_tab_selectors = [
-                    'button.tabs-component__button[type="button"]',
-                    'button:has-text("stories")',
-                    'button:has-text("Stories")',
-                    '[data-tab="stories"]',
-                    'a[href*="stories"]'
-                ]
-                
-                for selector in stories_tab_selectors:
-                    try:
-                        profile_logger.debug(f"Trying stories tab selector: {selector}")
-                        stories_tab = await page.wait_for_selector(selector, timeout=5000)
-                        if stories_tab:
-                            # Check if it's visible and clickable
-                            if await stories_tab.is_visible():
-                                await stories_tab.click()
-                                profile_logger.info(f"Stories tab clicked using selector: {selector}")
-                                await page.wait_for_timeout(Config.TIMEOUTS['stories_tab_delay'])
-                                stories_tab_found = True
-                                break
-                    except Exception as tab_error:
-                        profile_logger.debug(f"Selector {selector} failed: {tab_error}")
-                        continue
-                
-                if not stories_tab_found:
-                    profile_logger.warning("Stories tab not found with any selector")
-                    # Check if stories are already visible without clicking tab
-                    existing_stories = await page.query_selector_all(Config.SELECTORS['story_items'])
-                    if existing_stories:
-                        profile_logger.info(f"Found {len(existing_stories)} stories already visible, proceeding without tab click")
-                    else:
-                        # Look for any container that might have stories in it
-                        profile_logger.info("Looking for any stories content without navigation...")
-                        await page.wait_for_timeout(2000)  # Wait for any delayed content to load
-                        
-                        # Try to find any story-like content
-                        potential_selectors = [
-                            'ul.profile-media-list',
-                            '.profile-media-list',
-                            '.media-list',
-                            '.story-list',
-                            '.output-profile',
-                            '.profile-content',
-                            '[data-tab-content="stories"]'
-                        ]
-                        
-                        for selector in potential_selectors:
-                            try:
-                                content = await page.query_selector(selector)
-                                if content:
-                                    profile_logger.info(f"Found potential stories container with selector: {selector}")
-                                    break
-                            except Exception:
-                                pass
-
-                # Wait for stories container with simplified approach
-                profile_logger.info("Waiting for stories container to appear...")
-                container_found = False
-                
-                # Simplified container selectors
-                container_selectors = [
-                    Config.SELECTORS['stories_container'],  # '.output-profile'
-                    '.profile-content',
-                    'ul.profile-media-list',
-                    '.stories-container'
-                ]
-                
-                for selector in container_selectors:
-                    try:
-                        profile_logger.debug(f"Trying container selector: {selector}")
-                        await page.wait_for_selector(selector, timeout=8000)  # Shorter timeout
-                        profile_logger.info(f"Found stories container with: {selector}")
-                        container_found = True
-                        break
-                    except Exception as container_error:
-                        profile_logger.debug(f"Container selector {selector} failed: {container_error}")
-                        continue
-                
-                if not container_found:
-                    profile_logger.warning("Stories container not found with any selector")
-                    # Check page content to understand what's there
-                    page_text = await page.text_content('body')
-                    profile_logger.debug(f"Page contains text: {page_text[:200]}...")
-                    
-                    # Check if there are any obvious error messages
-                    if any(error_text in page_text.lower() for error_text in ['not found', 'error', 'private', 'does not exist']):
-                        profile_logger.warning("Page seems to contain error message")
-                        
-                    # Save debug info
-                    debug_path = os.path.join(Config.DIRECTORIES['debug_videos'], f"debug_stuck_{username}.html")
-                    page_html = await page.content()
-                    with open(debug_path, 'w', encoding='utf-8') as f:
-                        f.write(page_html)
-                    profile_logger.info(f"Saved debug HTML to: {debug_path}")
-                    
-                    # Continue anyway - maybe stories are there but container selector is wrong
-
-                # Scroll and load all stories with lazy loading
-                profile_logger.info("Loading all stories with lazy loading...")
+                # 5. Lazy Scroll to load all stories
                 await self._load_all_stories(page)
 
-                # First, check if we need to click any tabs to show stories
-                await page.wait_for_timeout(2000)  # Wait for any delayed content to load
-                
-                # Look for the stories tab within the tabs if we haven't found it yet
-                if not stories_tab_found:
+                # 6. Extract and Download Stories
+                story_items = await page.query_selector_all(Config.SELECTORS['story_items'])
+                profile_logger.info(f"Found {len(story_items)} story items")
+
+                downloaded_any_new = False
+
+                for item in reversed(story_items):  # Process oldest to newest
                     try:
-                        profile_logger.info("Looking for stories tab within tabs container...")
-                        tabs_container = await page.query_selector('.tabs-component')
-                        if tabs_container:
-                            profile_logger.info("Found tabs container, looking for stories tab...")
-                            story_button = await tabs_container.query_selector('button:has-text("stories")')
-                            if story_button:
-                                profile_logger.info("Found stories button within tabs container, clicking...")
-                                await story_button.click()
-                                await page.wait_for_timeout(2000)
-                                stories_tab_found = True
-                    except Exception as tab_container_error:
-                        profile_logger.debug(f"Error finding tabs container: {tab_container_error}")
-                
-                # Simplified story selectors
-                story_items = []
-                story_selectors = [
-                    Config.SELECTORS['story_items'],  # 'ul.profile-media-list > li.profile-media-list__item'
-                    'ul.profile-media-list > li',
-                    '.profile-media-list__item',
-                    '.story-item',
-                    'li:has(.button__download)',
-                    'li:has(a[href*="download"])',
-                    'li:has(img)',
-                    'li:has(video)'
-                ]
-                
-                for selector in story_selectors:
-                    try:
-                        items = await page.query_selector_all(selector)
-                        if items:
-                            story_items = items
-                            profile_logger.info(f"Found {len(story_items)} stories using selector: {selector}")
-                            break
-                    except Exception as selector_error:
-                        profile_logger.debug(f"Selector {selector} failed: {selector_error}")
-                        continue
-                
-                profile_logger.info(f"Total stories found for {username}: {len(story_items)}")
-                
-                if len(story_items) == 0:
-                    profile_logger.warning("No stories found. Trying alternative search approach...")
-                    
-                    # Try clearing and searching again with different approach
-                    try:
-                        # Clear the search field and try again
-                        search_input = await page.query_selector(Config.SELECTORS['search_input'])
-                        if search_input:
-                            await search_input.fill("")  # Clear field
-                            await page.wait_for_timeout(500)
-                            await search_input.fill(username)  # Fill again
-                            await page.wait_for_timeout(500)
-                            
-                            # Try clicking the search button instead of pressing Enter
-                            search_btn = await page.query_selector('button[type="submit"], .search-btn, input[type="submit"]')
-                            if search_btn:
-                                profile_logger.info("Found search button, clicking instead of pressing Enter...")
-                                await search_btn.click()
-                                await page.wait_for_timeout(3000)
-                                
-                                # Try to find stories again
-                                for selector in story_selectors:
-                                    items = await page.query_selector_all(selector)
-                                    if items:
-                                        story_items = items
-                                        profile_logger.info(f"Found {len(story_items)} stories after second search attempt")
-                                        break
-                    except Exception as search_retry_error:
-                        profile_logger.warning(f"Second search attempt failed: {search_retry_error}")
-                    
-                    # Save a debug screenshot if we still can't find stories
-                    if len(story_items) == 0:
-                        try:
-                            screenshot_path = os.path.join(Config.DIRECTORIES['debug_videos'], f"debug_screenshot_{username}.png")
-                            await page.screenshot(path=screenshot_path, full_page=True)
-                            profile_logger.info(f"Saved debug screenshot to {screenshot_path}")
-                        except Exception as screenshot_error:
-                            profile_logger.warning(f"Failed to save screenshot: {screenshot_error}")
-                    
-                    # Check what's actually on the page
-                    page_html = await page.content()
-                    profile_logger.debug(f"Page HTML contains 'profile-media-list': {'profile-media-list' in page_html}")
-                    profile_logger.debug(f"Page HTML contains 'button__download': {'button__download' in page_html}")
-                    profile_logger.debug(f"Page HTML contains 'stories': {'stories' in page_html.lower()}")
-                    profile_logger.debug(f"Page HTML contains username '{username}': {username in page_html.lower()}")
-                    
-                    # Look for any download links or media
-                    all_links = await page.query_selector_all('a[href]')
-                    download_links = []
-                    for link in all_links:
-                        href = await link.get_attribute('href')
-                        if href and ('download' in href.lower() or '.mp4' in href.lower() or '.jpg' in href.lower()):
-                            download_links.append(href)
-                    
-                    profile_logger.info(f"Found {len(download_links)} potential download links")
-                    if download_links:
-                        for i, link in enumerate(download_links[:3]):  # Log first 3
-                            profile_logger.debug(f"Download link {i+1}: {link}")
-                    
-                    # Check for error messages on the page
-                    error_selectors = ['.error', '.alert', '.warning', '.no-content', '.not-found']
-                    for error_sel in error_selectors:
-                        error_el = await page.query_selector(error_sel)
-                        if error_el:
-                            error_text = await error_el.text_content()
-                            profile_logger.warning(f"Found error message: {error_text}")
-                    
-                    # Save page HTML for debugging
-                    debug_path = os.path.join(Config.DIRECTORIES['debug_videos'], f"debug_no_stories_{username}.html")
-                    with open(debug_path, 'w', encoding='utf-8') as f:
-                        f.write(page_html)
-                    profile_logger.info(f"Saved page HTML to {debug_path}")
-                    
-                    # Take a screenshot for visual debugging
-                    try:
-                        screenshot_path = os.path.join(Config.DIRECTORIES['debug_videos'], f"debug_screenshot_{username}.png")
-                        await page.screenshot(path=screenshot_path, full_page=True)
-                        profile_logger.info(f"Saved screenshot to {screenshot_path}")
-                    except Exception as screenshot_error:
-                        profile_logger.warning(f"Failed to save screenshot: {screenshot_error}")
-                    
-                    # Try clearing and searching again with different approach
-                    profile_logger.info("Trying search again with alternative approach...")
-                    try:
-                        # Clear the search field and try again
-                        search_input = await page.query_selector(Config.SELECTORS['search_input'])
-                        if search_input:
-                            await search_input.fill("")  # Clear field
-                            await page.wait_for_timeout(500)
-                            await search_input.fill(username)  # Fill again
-                            await page.wait_for_timeout(500)
-                            
-                            # Try clicking the search button instead of pressing Enter
-                            search_btn = await page.query_selector('button[type="submit"], .search-btn, input[type="submit"], .search-form__button')
-                            if search_btn:
-                                profile_logger.info("Found search button, clicking instead of pressing Enter...")
-                                await search_btn.click()
-                                await page.wait_for_timeout(3000)
-                                
-                                # Try to find stories again
-                                items = await page.query_selector_all(Config.SELECTORS['story_items'])
-                                if items:
-                                    story_items = items
-                                    profile_logger.info(f"Found {len(story_items)} stories after second search attempt")
-                        else:
-                            profile_logger.warning("Could not find search input for second attempt")
-                                
-                    except Exception as search_retry_error:
-                        profile_logger.warning(f"Second search attempt failed: {search_retry_error}")
-                
-                    # If still no stories, try simplified fallback approach
-                if len(story_items) == 0:
-                    profile_logger.info("Trying to find any media elements as fallback...")
-                    
-                    # Look for any media elements or download links directly
-                    media_elements = await page.query_selector_all('a[href*=".mp4"], a[href*=".jpg"], img, video, .media-content')
-                    if media_elements:
-                        profile_logger.info(f"Found {len(media_elements)} potential media elements as fallback")
-                        # We'll process these as story items
-                        story_items = media_elements
-                        
-                    # If still no stories, look for download links directly
-                    if len(story_items) == 0:
-                        profile_logger.info("Looking for direct download links...")
-                        download_links_elements = await page.query_selector_all('a.button__download, a[href*="download"], a[download], .button__download')
-                        if download_links_elements:
-                            profile_logger.info(f"Found {len(download_links_elements)} direct download links")
-                            story_items = download_links_elements                # Process stories sequentially (from old_downloader - more reliable)
-                for index, item in enumerate(story_items):
-                    profile_logger.info(f"Processing story {index + 1}/{len(story_items)}")
-                    
-                    try:
-                        # Re-query the item to avoid stale element references
-                        fresh_items = await page.query_selector_all(Config.SELECTORS['story_items'])
-                        if index >= len(fresh_items):
-                            profile_logger.warning(f"Story {index + 1} no longer exists, skipping")
-                            continue
-                        
-                        item = fresh_items[index]
-                        
-                        # Look for the download button to get the actual media URL
-                        download_button = await item.query_selector('a.button__download, .button__download')
-                        if not download_button:
-                            profile_logger.warning(f"No download button found for story {index + 1}")
-                            continue
-                    except Exception as e:
-                        profile_logger.warning(f"Error accessing story {index + 1} element: {e}")
-                        continue
-                    
-                    try:
-                        # Get the direct media URL from the download button's href
-                        direct_url = await download_button.get_attribute('href')
-                        if not direct_url:
-                            profile_logger.warning(f"No href attribute found for story {index + 1}")
-                            continue
-                        
-                        profile_logger.debug(f"Direct media URL: {direct_url}")
-                        
-                        # Determine media type from URL
-                        data_media_type = 'video' if direct_url.lower().endswith(('.mp4', '.mov', '.avi', '.webm')) else 'image'
-                        
-                        # Determine file extension from URL
-                        if '.mp4' in direct_url.lower():
-                            ext = '.mp4'
-                        elif '.jpg' in direct_url.lower() or '.jpeg' in direct_url.lower():
-                            ext = '.jpg'
-                        elif '.png' in direct_url.lower():
-                            ext = '.png'
-                        elif '.webm' in direct_url.lower():
-                            ext = '.webm'
-                        else:
-                            # Default fallback based on media type
-                            ext = Config.FILE_EXTENSIONS['video'] if data_media_type == 'video' else Config.FILE_EXTENSIONS['image']
-                        
-                        # Generate a unique story ID using index and timestamp
-                        timestamp = int(time.time())
-                        data_id = f"{timestamp}_{index}"
+                        # Get story ID
+                        data_id = await item.get_attribute('data-id')
                         story_id = self._extract_story_id(data_id)
-                        story_id_int = timestamp + index
                         
-                        profile_logger.debug(f"Story ID check: story_id_int={story_id_int}, initial_id_to_check={initial_id_to_check}")
-                        
-                        if story_id_int > initial_id_to_check:
-                            filename = f"story_{username}_{story_id}{ext}"
-                            save_path = os.path.join(user_dir, filename)
+                        # Skip already seen stories
+                        if story_id == "None" or not story_id:
+                            profile_logger.warning(f"Invalid story ID found: {story_id}, skipping.")
+                            continue
                             
-                            profile_logger.info(f"Attempting to download: {filename}")
-                            profile_logger.info(f"Media type detected: {data_media_type}")
-                            
-                            # Download using requests with the direct URL
-                            if await self._download_with_retry(direct_url, save_path, profile_logger):
-                                profile_logger.info(f"Downloaded: {save_path}")
-                                results.append((save_path, story_id))
-                                if story_id_int > int(newest_id_found.split("_")[0] if "_" in newest_id_found else newest_id_found):
-                                    newest_id_found = story_id
-                            else:
-                                profile_logger.warning(f"Failed to download {filename}")
-                                    
-                            # Rate limiting: wait between downloads
-                            await page.wait_for_timeout(Config.TIMEOUTS['download_delay'])
+                        # Compare with last seen ID
+                        if last_seen_story_id and last_seen_story_id != "None" and story_id != "None":
+                            try:
+                                # Handle timestamp-based IDs vs numeric IDs
+                                if story_id.startswith('ts_') and last_seen_story_id.startswith('ts_'):
+                                    # For timestamp-based IDs, extract the timestamp part
+                                    current_ts = int(story_id.split('_')[1])
+                                    last_ts = int(last_seen_story_id.split('_')[1])
+                                    if current_ts <= last_ts:
+                                        profile_logger.info(f"Story {story_id} already seen (timestamp), skipping.")
+                                        continue
+                                elif story_id.isdigit() and last_seen_story_id.isdigit():
+                                    # For numeric IDs, compare directly
+                                    if int(story_id) <= int(last_seen_story_id):
+                                        profile_logger.info(f"Story {story_id} already seen (numeric), skipping.")
+                                        continue
+                                else:
+                                    # Mixed ID types - don't skip, but log it
+                                    profile_logger.info(f"Different ID formats: current={story_id}, last={last_seen_story_id}. Processing anyway.")
+                            except ValueError as ve:
+                                profile_logger.warning(f"Could not compare story IDs ({story_id} vs {last_seen_story_id}): {ve}")
+                                # Continue processing the story since we couldn't determine if it's old
+
+                        # Try to get download link directly
+                        download_link = await item.query_selector(Config.SELECTORS['download_link'])
+                        if download_link:
+                            media_url = await download_link.get_attribute('href')
                         else:
-                            profile_logger.info(f"Skipping story {story_id} - already processed")
-                    
-                    except Exception as story_error:
-                        profile_logger.warning(f"Error processing story {index + 1}: {story_error}")
+                            # Try to get media element source
+                            media_element = await item.query_selector(Config.SELECTORS['media_content'])
+                            if not media_element:
+                                profile_logger.warning(f"No media content found for story {story_id}, skipping.")
+                                continue
+                                
+                            media_url = await media_element.get_attribute('src')
+                            
+                        # No media URL found
+                        if not media_url:
+                            profile_logger.warning(f"No media URL found for story {story_id}, skipping.")
+                            continue
+
+                        # Determine media type
+                        if media_url.endswith(('.mp4', '.webm', '.mov')):
+                            media_type = "video"
+                        elif media_url.endswith(('.jpg', '.jpeg', '.png', '.webp')):
+                            media_type = "image"
+                        else:
+                            # Fallback to tag name check if URL doesn't have clear extension
+                            media_element = await item.query_selector(Config.SELECTORS['media_content'])
+                            if media_element:
+                                media_type = "video" if "video" in await media_element.evaluate('node => node.tagName.toLowerCase()') else "image"
+                            else:
+                                media_type = "video"  # Default to video if we can't determine
+                        
+                        file_extension = Config.FILE_EXTENSIONS[media_type]
+                        
+                        # Generate a safe filename
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        filename = f"{username}_{story_id}_{timestamp}{file_extension}"
+                        save_path = os.path.join(download_dir, filename)
+
+                        # Download the file
+                        profile_logger.info(f"Attempting to download story {story_id} from {media_url}")
+                        if await self._download_with_retry(media_url, save_path, profile_logger, Config.DOWNLOAD_SETTINGS['max_retries']):
+                            profile_logger.info(f"Successfully downloaded story {story_id}")
+                            yield username, save_path, story_id
+                            # Only update newest_story_id if it's a valid ID
+                            if story_id != "None" and story_id:
+                                newest_story_id = story_id
+                            downloaded_any_new = True
+                        else:
+                            profile_logger.error(f"Failed to download story {story_id}")
+                    except Exception as e:
+                        profile_logger.error(f"Error processing story item: {e}")
                         continue
-            except Exception as e:
-                profile_logger.error(f"An error occurred while processing {username}: {e}", exc_info=True)
-            finally:
-                await context.close()
+                
+                if not downloaded_any_new:
+                    profile_logger.info(f"No new stories found for {username}")
+                
+                # Signal completion with newest ID
+                yield username, None, newest_story_id
+
+        except Exception as e:
+            profile_logger.error(f"An error occurred during story download for {username}: {e}")
+            yield username, None, None
+        finally:
+            if browser:
+                # First close the context to ensure video is saved properly
+                if 'context' in locals():
+                    await context.close()
+                    if Config.DOWNLOAD_SETTINGS.get('enable_debug_video', False):
+                        profile_logger.info(f"Debug video recording saved for {username}")
+                
+                # Then close the browser
                 await browser.close()
-        
-        profile_logger.info(f"Download complete. Downloaded {len(results)} new stories.")
-        return results, newest_id_found
+                profile_logger.info(f"Browser closed for {username}")
+                
+                # Rename the video file to a more descriptive name if debug video is enabled
+                if Config.DOWNLOAD_SETTINGS.get('enable_debug_video', False):
+                    try:
+                        # Wait for video file to be fully written
+                        await asyncio.sleep(2)
+                        
+                        if os.path.exists(debug_video_dir):
+                            # Find all webm files in the directory
+                            video_files = [f for f in os.listdir(debug_video_dir) if f.endswith('.webm')]
+                            
+                            if video_files:
+                                # Sort by creation time, newest first
+                                video_files.sort(key=lambda x: os.path.getctime(os.path.join(debug_video_dir, x)), reverse=True)
+                                
+                                # Get the most recently created video file
+                                newest_video = video_files[0]
+                                newest_video_path = os.path.join(debug_video_dir, newest_video)
+                                
+                                # Only process files created in the last minute
+                                if time.time() - os.path.getctime(newest_video_path) < 60:
+                                    # Generate a descriptive name
+                                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                    new_name = f"{username}_{timestamp}.webm"
+                                    new_path = os.path.join(debug_video_dir, new_name)
+                                    
+                                    # Copy instead of rename to avoid issues with file being in use
+                                    shutil.copy2(newest_video_path, new_path)
+                                    profile_logger.info(f"Debug video copied to: {new_name}")
+                                    
+                                    # Try to remove the original file, but don't error if we can't
+                                    try:
+                                        os.remove(newest_video_path)
+                                        profile_logger.info(f"Original debug video removed: {newest_video}")
+                                    except Exception as remove_error:
+                                        profile_logger.warning(f"Could not remove original debug video: {remove_error}")
+                    except Exception as rename_error:
+                        profile_logger.warning(f"Error handling debug video: {rename_error}")
 
-    async def download_user_stories_stream(self, username: str, last_seen_story_id: str = None):
+    async def download_user_stories(self, username: str, last_seen_story_id: Optional[str] = None):
         """
-        Async generator that yields stories as they are downloaded.
-        This is used by the bot for real-time processing.
-        """
-        results, newest_id = await self.download_user_stories(username, last_seen_story_id)
-        for file_path, story_id in results:
-            yield file_path, story_id
-
-
-class ConcurrentDownloader:
-    """
-    Concurrent downloader that manages multiple AnonyigDownloader workers
-    to process multiple profiles simultaneously, with Redis DB compatibility.
-    
-    This class is taken from the copy version which works well with Redis.
-    """
-    
-    def __init__(self, max_workers: int = None):
-        """
-        Initialize the concurrent downloader.
-        
-        Args:
-            max_workers: Maximum number of concurrent workers (defaults to config value)
-        """
-        self.max_workers = max_workers or Config.DOWNLOAD_SETTINGS['max_concurrent_workers']
-        self.logger = get_logger()
-        self.semaphore = asyncio.Semaphore(self.max_workers)
-        self.logger.info(f"ConcurrentDownloader initialized with {self.max_workers} workers")
-    
-    async def _download_profile_worker(self, username: str, last_seen_story_id: str = None, worker_id: int = 0) -> Tuple[str, List[Tuple[str, str]], str]:
-        """
-        Worker function to download stories for a single profile.
+        Downloads stories for a given username and returns them in a format compatible with legacy code.
         
         Args:
             username: Instagram username
-            last_seen_story_id: Last seen story ID for this profile
-            worker_id: Worker identifier for staggered launches
+            last_seen_story_id: Optional ID of the last seen story
             
         Returns:
-            Tuple of (username, results, newest_id)
+            Tuple of (list of (file_path, story_id) tuples, newest_story_id)
         """
-        async with self.semaphore:
-            # Stagger browser launches to avoid overwhelming the site
-            if Config.DOWNLOAD_SETTINGS.get('browser_launch_stagger', True):
-                stagger_delay = worker_id * (Config.TIMEOUTS.get('browser_launch_delay', 2000) / 1000)
-                if stagger_delay > 0:
-                    self.logger.info(f"Worker {worker_id} waiting {stagger_delay:.1f}s before launching browser for {username}")
-                    await asyncio.sleep(stagger_delay)
-            
-            downloader = AnonyigDownloader()
-            max_retries = Config.DOWNLOAD_SETTINGS.get('max_retries', 3)
-            
-            for attempt in range(max_retries):
-                try:
-                    self.logger.info(f"Worker {worker_id} started for profile: {username} (attempt {attempt + 1})")
-                    results, newest_id = await downloader.download_user_stories(username, last_seen_story_id)
-                    self.logger.info(f"Worker {worker_id} completed for profile: {username} - {len(results)} stories downloaded")
-                    return username, results, newest_id
-                except Exception as e:
-                    error_msg = str(e).lower()
-                    if "page crashed" in error_msg or "crash" in error_msg:
-                        self.logger.error(f"Worker {worker_id} page crashed for profile {username} (attempt {attempt + 1})")
-                        # Longer wait for page crashes to allow system to recover
-                        wait_time = (3 ** attempt) + (worker_id * 2.0)  # Exponential backoff with longer delays
-                    else:
-                        self.logger.warning(f"Worker {worker_id} attempt {attempt + 1} failed for profile {username}: {e}")
-                        wait_time = (2 ** attempt) + (worker_id * 0.5)  # Add worker-specific jitter
-                    
-                    if attempt < max_retries - 1:
-                        self.logger.info(f"Retrying {username} in {wait_time:.1f} seconds...")
-                        await asyncio.sleep(wait_time)
-                    else:
-                        self.logger.error(f"Worker {worker_id} failed for profile {username} after {max_retries} attempts")
-            
-            return username, [], last_seen_story_id or "0"
-    
-    async def download_multiple_profiles(self, profile_data: Dict[str, str]) -> Dict[str, Tuple[List[Tuple[str, str]], str]]:
+        self.logger.info(f"Starting legacy download for profile: {username}")
+        results = []
+        newest_story_id = last_seen_story_id
+        
+        # Use the async generator to collect all stories
+        async for u, file_path, story_id in self.download_stories(username, last_seen_story_id):
+            if file_path is None:
+                # This is the completion signal or error
+                newest_story_id = story_id
+            else:
+                results.append((file_path, story_id))
+                if newest_story_id is None or (
+                    story_id and story_id != "None" and 
+                    (newest_story_id == "None" or 
+                     (story_id.isdigit() and newest_story_id.isdigit() and int(story_id) > int(newest_story_id)))
+                ):
+                    newest_story_id = story_id
+        
+        return results, newest_story_id
+
+    async def concurrent_download_stories(self, profile_data: Dict[str, Optional[str]]):
         """
-        Download stories for multiple profiles concurrently.
-        
-        Args:
-            profile_data: Dictionary mapping username to last_seen_story_id
-            
-        Returns:
-            Dictionary mapping username to (results, newest_id) tuples
+        Manages concurrent downloads for multiple profiles using a queue.
+        profile_data: {username: last_seen_story_id}
         """
-        if not profile_data:
-            return {}
+        self.logger.info("Starting concurrent streaming...")
         
-        self.logger.info(f"Starting concurrent download for {len(profile_data)} profiles")
-        
-        # Create tasks for all profiles with worker IDs
-        tasks = [
-            self._download_profile_worker(username, last_seen_story_id, idx)
-            for idx, (username, last_seen_story_id) in enumerate(profile_data.items())
-        ]
-        
-        # Execute all tasks concurrently
-        try:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-        except Exception as e:
-            self.logger.error(f"Error in concurrent download: {e}")
-            return {}
-        
-        # Process results
-        download_results = {}
-        successful_downloads = 0
-        
-        for result in results:
-            if isinstance(result, Exception):
-                self.logger.error(f"Task failed with exception: {result}")
-                continue
-                
-            username, stories, newest_id = result
-            download_results[username] = (stories, newest_id)
-            if stories:
-                successful_downloads += len(stories)
-        
-        self.logger.info(f"Concurrent download completed: {successful_downloads} total stories from {len(download_results)} profiles")
-        return download_results
-    
-    async def download_profiles_stream(self, profile_data: Dict[str, str]):
-        """
-        Stream stories as they are downloaded from multiple profiles concurrently.
-        
-        Args:
-            profile_data: Dictionary mapping username to last_seen_story_id
-            
-        Yields:
-            Tuples of (username, file_path, story_id)
-        """
-        if not profile_data:
-            return
-        
-        self.logger.info(f"Starting concurrent streaming download for {len(profile_data)} profiles")
-        
-        # Create a queue to collect results from workers
+        # Create a queue to manage results from workers
         result_queue = asyncio.Queue()
-        
-        async def worker_with_queue(username: str, last_seen_story_id: str = None, worker_id: int = 0):
-            """Worker that puts results into the queue as they complete"""
+
+        # Worker function to run download_stories for each profile
+        async def worker_with_queue(username, last_seen_story_id, worker_id):
+            self.logger.info(f"Stream worker {worker_id} started for {username}")
             try:
-                username_result, stories, newest_id = await self._download_profile_worker(username, last_seen_story_id, worker_id)
-                for file_path, story_id in stories:
-                    await result_queue.put((username_result, file_path, story_id))
-                await result_queue.put((username_result, None, newest_id))  # Signal completion for this profile
+                downloader = AnonyigDownloader() # Create a new instance for each worker
+                newest_id = None
+                
+                async for username, file_path, story_id in downloader.download_stories(username, last_seen_story_id):
+                    if file_path is None:
+                        # This is the completion signal with newest_id
+                        newest_id = story_id
+                        await result_queue.put((username, None, newest_id)) # Signal completion with newest_id
+                    else:
+                        await result_queue.put((username, file_path, story_id))
+                
             except Exception as e:
                 self.logger.error(f"Stream worker {worker_id} failed for {username}: {e}")
                 await result_queue.put((username, None, None))  # Signal failure
@@ -841,4 +537,92 @@ class ConcurrentDownloader:
         
         # Wait for all tasks to complete
         await asyncio.gather(*tasks, return_exceptions=True)
-        self.logger.info("Concurrent streaming download completed")
+        self.logger.info("Concurrent streaming complete.")
+
+
+class ConcurrentDownloader:
+    """
+    Manages concurrent downloads of Instagram stories for multiple profiles.
+    Uses the AnonyigDownloader internally.
+    """
+    
+    def __init__(self, max_workers: int = 3):
+        """
+        Initialize the concurrent downloader.
+        
+        Args:
+            max_workers: Maximum number of concurrent workers
+        """
+        self.logger = get_logger()
+        self.max_workers = max_workers
+        self.logger.info(f"ConcurrentDownloader initialized with {max_workers} max workers")
+    
+    async def download_multiple_profiles(self, profile_data: Dict[str, Optional[str]]):
+        """
+        Download stories for multiple profiles concurrently.
+        
+        Args:
+            profile_data: Dictionary mapping username to last_seen_story_id
+            
+        Returns:
+            Dictionary mapping username to (stories_list, newest_story_id)
+            where stories_list is a list of (file_path, story_id) tuples
+        """
+        self.logger.info(f"Starting concurrent download for {len(profile_data)} profiles")
+        
+        results = {}
+        semaphore = asyncio.Semaphore(self.max_workers)
+        
+        async def download_with_semaphore(username, last_seen_story_id):
+            async with semaphore:
+                try:
+                    downloader = AnonyigDownloader()  # Create new instance for each profile
+                    stories = []
+                    newest_id = None
+                    
+                    async for u, file_path, story_id in downloader.download_stories(username, last_seen_story_id):
+                        if file_path is None:
+                            # This is the completion or error signal
+                            newest_id = story_id
+                        else:
+                            stories.append((file_path, story_id))
+                    
+                    return username, stories, newest_id
+                except Exception as e:
+                    self.logger.error(f"Error downloading stories for {username}: {e}")
+                    return username, [], None
+        
+        # Create download tasks for all profiles
+        tasks = [
+            asyncio.create_task(download_with_semaphore(username, last_seen_id))
+            for username, last_seen_id in profile_data.items()
+        ]
+        
+        # Wait for all tasks to complete
+        completed = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Process results
+        for result in completed:
+            if isinstance(result, tuple) and len(result) == 3:
+                username, stories, newest_id = result
+                results[username] = (stories, newest_id)
+            else:
+                self.logger.error(f"Invalid result from download task: {result}")
+        
+        return results
+    
+    async def download_profiles_stream(self, profile_data: Dict[str, Optional[str]]):
+        """
+        Stream download results for multiple profiles.
+        This is a wrapper around AnonyigDownloader.concurrent_download_stories.
+        
+        Args:
+            profile_data: Dictionary mapping username to last_seen_story_id
+            
+        Yields:
+            (username, file_path, story_id) tuples as downloads complete
+            If file_path is None, it's a signal that processing for that username is complete
+        """
+        downloader = AnonyigDownloader()
+        async for result in downloader.concurrent_download_stories(profile_data):
+            yield result
