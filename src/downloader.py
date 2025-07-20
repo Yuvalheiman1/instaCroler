@@ -15,13 +15,20 @@ class AnonyigDownloader:
     It uses Playwright for browser automation.
     """
     def __init__(self, download_dir=None):
-        """
-        Initializes the downloader and creates the main download directory.
-        """
-        self.download_dir = download_dir or Config.DIRECTORIES['downloads']
-        self.logger = get_logger()
-        os.makedirs(self.download_dir, exist_ok=True)
-        self.logger.info(f"AnonyigDownloader initialized with download_dir: {self.download_dir}")
+            """
+            Initializes the downloader and creates the main download directory.
+            """
+            self.download_dir = download_dir or Config.DIRECTORIES['downloads']
+            self.logger = get_logger()
+            os.makedirs(self.download_dir, exist_ok=True)
+            
+            # Initialize browser attributes to None
+            self.playwright = None
+            self.browser = None
+            self.page = None
+            self.bot = None # If you are creating a bot instance here
+            
+            self.logger.info(f"AnonyigDownloader initialized with download_dir: {self.download_dir}")
 
     def _extract_story_id(self, data_id: str) -> str:
         """
