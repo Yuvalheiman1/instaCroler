@@ -2,8 +2,8 @@ import asyncio
 import os
 import sys
 import logging
-from datetime import datetime, timedelta
-from typing import List, Tuple, Optional
+from datetime import datetime
+from typing import Optional
 from dotenv import load_dotenv
 from telegram import Bot
 
@@ -36,7 +36,6 @@ class StoryScraper:
         
         self.bot = Bot(token=self.bot_token)
         self.max_retries = Config.DOWNLOAD_SETTINGS.get('max_retries', 3)
-        self.retry_delay = Config.DOWNLOAD_SETTINGS.get('retry_delay', 5)
         
         self.logger.info("Story Scraper initialized")
     
@@ -173,7 +172,7 @@ class StoryScraper:
             except Exception as e:
                 self.logger.error(f"Failed to send {media_type} from {username} (attempt {attempt + 1}): {e}")
                 if attempt < self.max_retries - 1:
-                    await asyncio.sleep(self.retry_delay)
+                    await asyncio.sleep(5)  # Fixed 5 second delay between retries
                 else:
                     self.logger.error(f"Max retries reached for sending {media_type} from {username}. Adding to DLQ.")
                     self.db.add_to_dlq({
@@ -187,12 +186,10 @@ async def main():
     """Main function to run the scraper."""
     scraper = StoryScraper()
     try:
-        await scraper.downloader.start_browser()
         await scraper.process_all_profiles()
     except Exception as e:
         scraper.logger.critical(f"A critical error occurred: {e}")
     finally:
-        await scraper.downloader.close_browser()
         await scraper.bot.close()
         scraper.logger.info("Scraper run finished.")
 

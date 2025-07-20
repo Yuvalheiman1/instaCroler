@@ -1,11 +1,11 @@
 import os
 import requests
 import time
-from typing import List, Dict, Optional
+from typing import Optional
 from datetime import datetime
-from playwright.async_api import async_playwright, Browser, Page, Playwright
+from playwright.async_api import async_playwright
 from .config import Config
-from .logger import get_logger, log_info, log_error, log_warning, log_debug, get_profile_logger
+from .logger import get_logger, get_profile_logger
 
 class AnonyigDownloader:
     """
@@ -15,9 +15,6 @@ class AnonyigDownloader:
     def __init__(self):
         """Initializes the downloader."""
         self.logger = get_logger()
-        self.playwright: Playwright | None = None
-        self.browser: Browser | None = None
-        self.page: Page | None = None
         self.logger.info("AnonyigDownloader initialized")
 
     def _extract_story_id(self, data_id: str) -> str:
@@ -123,7 +120,7 @@ class AnonyigDownloader:
         
         results = []
         newest_id_found = last_seen_story_id or "0"
-        user_dir = os.path.join(self.download_dir, username)
+        user_dir = os.path.join(Config.DIRECTORIES['downloads'], username)
         os.makedirs(user_dir, exist_ok=True)
         os.makedirs(Config.DIRECTORIES['debug_videos'], exist_ok=True)
 
@@ -240,13 +237,6 @@ class AnonyigDownloader:
                         continue
                     
                     try:
-                        
-                        # Look for the download button to get the actual media URL
-                        download_button = await item.query_selector('a.button__download, .button__download')
-                        if not download_button:
-                            profile_logger.warning(f"No download button found for story {index + 1}")
-                            continue
-                        
                         # Get the direct media URL from the download button's href
                         direct_url = await download_button.get_attribute('href')
                         if not direct_url:
@@ -320,128 +310,3 @@ class AnonyigDownloader:
         results, newest_id = await self.download_user_stories(username, last_seen_story_id)
         for file_path, story_id in results:
             yield file_path, story_id
-
-    async def start_browser(self):
-        """Starts the Playwright browser and creates a new page."""
-        if self.browser:
-            self.logger.warning("Browser is already running.")
-            return
-        try:
-            self.playwright = await async_playwright().start()
-            self.browser = await self.playwright.chromium.launch(headless=True)
-            self.page = await self.browser.new_page()
-            self.logger.info("Playwright browser started successfully.")
-        except Exception as e:
-            self.logger.error(f"Failed to start browser: {e}")
-            raise
-
-    async def close_browser(self):
-        """Closes the Playwright browser."""
-        if self.page:
-            await self.page.close()
-        if self.browser:
-            await self.browser.close()
-        if self.playwright:
-            await self.playwright.stop()
-        self.logger.info("Playwright browser closed.")
-
-    async def download_user_stories(self, username: str, last_seen_story_id: Optional[str] = None) -> List[Dict[str, str]]:
-        """
-        Downloads all new stories for a given user.
-
-        Args:
-            username: The Instagram username.
-            last_seen_story_id: The ID of the last story seen for this user.
-
-        Returns:
-            A list of dictionaries, where each dictionary contains the type and path of the downloaded media.
-        """
-        url = f"https://anonyig.com/profile/{username}"
-        self.logger.info(f"Navigating to {url}")
-        
-        media_items = []
-        
-        try:
-            await self.page.goto(url, wait_until='networkidle', timeout=60000)
-            
-            # Check for profile not found
-            if "Profile not found" in await self.page.text_content('body'):
-                self.logger.warning(f"Profile '{username}' not found on Anonyig.")
-                return []
-
-            # Wait for stories to load
-            await self.page.wait_for_selector('.story-item', timeout=15000)
-            
-            story_elements = await self.page.query_selector_all('.story-item')
-            self.logger.info(f"Found {len(story_elements)} story items for '{username}'.")
-
-            new_stories_found = False
-            for story_element in reversed(story_elements): # Process from oldest to newest
-                story_id = await story_element.get_attribute('data-id')
-
-                if last_seen_story_id and story_id == last_seen_story_id:
-                    new_stories_found = True
-                    self.logger.info(f"Found last seen story ID {last_seen_story_id}. Processing subsequent stories.")
-                    continue # Skip this one, process the next
-
-                if last_seen_story_id and not new_stories_found:
-                    continue # Keep skipping until we find the last seen story
-
-                # Click the story to open the modal
-                await story_element.click()
-                await self.page.wait_for_selector('.story-modal', timeout=10000)
-                
-                # Wait for the download button to be ready
-                download_button = await self.page.wait_for_selector('a.button__download', timeout=10000)
-                media_url = await download_button.get_attribute('href')
-                
-                media_type = 'video' if media_url.endswith('.mp4') else 'image'
-                
-                # Download the media
-                media_path = await self._download_media(media_url, username, story_id)
-                
-                if media_path:
-                    media_items.append({"type": media_type, "path": media_path, "id": story_id})
-                
-                # Close the modal
-                close_button = await self.page.query_selector('.story-modal .button-close')
-                if close_button:
-                    await close_button.click()
-                await self.page.wait_for_selector('.story-modal', state='hidden', timeout=5000)
-
-            return media_items
-
-        except TimeoutError:
-            self.logger.info(f"No stories found for '{username}' or page timed out.")
-            return []
-        except Exception as e:
-            self.logger.error(f"An error occurred while downloading stories for {username}: {e}")
-            # Take a screenshot for debugging
-            screenshot_path = os.path.join(Config.DOWNLOAD_PATH, f"error_{username}_{datetime.now():%Y%m%d_%H%M%S}.png")
-            await self.page.screenshot(path=screenshot_path)
-            self.logger.info(f"Saved screenshot to {screenshot_path}")
-            return []
-
-    async def _download_media(self, url: str, username: str, story_id: str) -> Optional[str]:
-        """Downloads a single media file."""
-        try:
-            async with self.page.context.new_page() as download_page:
-                response = await download_page.goto(url)
-                if not response.ok:
-                    self.logger.error(f"Failed to download media from {url}. Status: {response.status}")
-                    return None
-                
-                content = await response.body()
-                
-                file_extension = '.mp4' if url.endswith('.mp4') else '.jpg'
-                file_name = f"{username}_{story_id}{file_extension}"
-                file_path = os.path.join(Config.DOWNLOAD_PATH, file_name)
-                
-                with open(file_path, 'wb') as f:
-                    f.write(content)
-                    
-                self.logger.info(f"Successfully downloaded {file_path}")
-                return file_path
-        except Exception as e:
-            self.logger.error(f"Error in _download_media for url {url}: {e}")
-            return None
