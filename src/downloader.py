@@ -384,6 +384,25 @@ class AnonyigDownloader:
                 profile_logger.info("Loading all stories with lazy loading...")
                 await self._load_all_stories(page)
 
+                # First, check if we need to click any tabs to show stories
+                await page.wait_for_timeout(2000)  # Wait for any delayed content to load
+                
+                # Look for the stories tab within the tabs if we haven't found it yet
+                if not stories_tab_found:
+                    try:
+                        profile_logger.info("Looking for stories tab within tabs container...")
+                        tabs_container = await page.query_selector('.tabs-component')
+                        if tabs_container:
+                            profile_logger.info("Found tabs container, looking for stories tab...")
+                            story_button = await tabs_container.query_selector('button:has-text("stories")')
+                            if story_button:
+                                profile_logger.info("Found stories button within tabs container, clicking...")
+                                await story_button.click()
+                                await page.wait_for_timeout(2000)
+                                stories_tab_found = True
+                    except Exception as tab_container_error:
+                        profile_logger.debug(f"Error finding tabs container: {tab_container_error}")
+                
                 # Collect all story items - try multiple selectors
                 story_items = []
                 story_selectors = [
@@ -395,6 +414,9 @@ class AnonyigDownloader:
                     'li[data-media]',
                     'li:has(.button__download)',
                     'li:has(a[href*="download"])',
+                    '.media-content',
+                    '.profile-media-list__item',
+                    '.tabs-component-panels [class*="story"]',
                     'li:has(img)',
                     'li:has(video)'
                 ]
@@ -418,6 +440,35 @@ class AnonyigDownloader:
                     # Check page URL to ensure we're on the right page
                     current_url = page.url
                     profile_logger.info(f"Current page URL: {current_url}")
+                    
+                    # Try clicking all possible tab-like elements to find stories
+                    profile_logger.info("Trying to click on any possible tab elements...")
+                    tab_elements = await page.query_selector_all('button, .tab, [role="tab"], .tabs-component__button')
+                    for tab in tab_elements:
+                        try:
+                            tab_text = await tab.text_content()
+                            profile_logger.info(f"Found potential tab with text: {tab_text}")
+                            if "stor" in tab_text.lower():
+                                profile_logger.info(f"Clicking tab with text: {tab_text}")
+                                await tab.click()
+                                await page.wait_for_timeout(2000)
+                                
+                                # Check if stories appeared after clicking
+                                story_container_check = await page.query_selector_all('ul.profile-media-list, .profile-media-list, .media-list')
+                                if story_container_check:
+                                    profile_logger.info(f"Found story container after clicking tab: {tab_text}")
+                                    await page.wait_for_timeout(1000)
+                                    # Try to find stories again
+                                    for selector in story_selectors:
+                                        items = await page.query_selector_all(selector)
+                                        if items:
+                                            story_items = items
+                                            profile_logger.info(f"Found {len(story_items)} stories after clicking tab")
+                                            break
+                                    if story_items:
+                                        break
+                        except Exception as tab_click_error:
+                            profile_logger.debug(f"Error clicking tab: {tab_click_error}")
                     
                     # Get page title
                     try:
@@ -486,17 +537,45 @@ class AnonyigDownloader:
                     except Exception as direct_error:
                         profile_logger.warning(f"Direct URL approach failed: {direct_error}")
                 
-                # If still no stories, try one more alternative approach
+                    # If still no stories, try more approaches
                 if len(story_items) == 0:
                     profile_logger.info("Trying to find any media elements as fallback...")
+                    
+                    # Debug the page structure to understand what's happening
+                    profile_logger.info("Examining DOM structure for insight...")
+                    structure_elements = await page.evaluate('''() => {
+                        const result = [];
+                        // Find elements that likely contain media or content
+                        const containers = document.querySelectorAll('.tabs-component-panels, .profile-content, .media-content, [class*="story"], [class*="media"]');
+                        for (const container of containers) {
+                            result.push({
+                                className: container.className,
+                                childrenCount: container.children.length,
+                                hasMedia: container.querySelector('img, video, a[href*=".mp4"], a[href*=".jpg"]') !== null
+                            });
+                        }
+                        return result;
+                    }''')
+                    
+                    if structure_elements:
+                        profile_logger.info(f"Found {len(structure_elements)} potential content containers")
+                        for i, el in enumerate(structure_elements):
+                            profile_logger.debug(f"Container {i+1}: class={el.get('className', 'unknown')}, children={el.get('childrenCount', 0)}, has media={el.get('hasMedia', False)}")
+                    
                     # Look for any media elements that might be stories
-                    media_elements = await page.query_selector_all('img[src*="instagram"], video[src*="instagram"], a[href*=".mp4"], a[href*=".jpg"]')
+                    media_elements = await page.query_selector_all('img[src*="instagram"], video[src*="instagram"], a[href*=".mp4"], a[href*=".jpg"], .media-content')
                     if media_elements:
                         profile_logger.info(f"Found {len(media_elements)} potential media elements as fallback")
                         # We'll process these as story items
                         story_items = media_elements
-                
-                # Process stories sequentially (from old_downloader - more reliable)
+                        
+                    # If still no stories, look for download links directly
+                    if len(story_items) == 0:
+                        profile_logger.info("Looking for direct download links...")
+                        download_links_elements = await page.query_selector_all('a.button__download, a[href*="download"], a[download], .button__download')
+                        if download_links_elements:
+                            profile_logger.info(f"Found {len(download_links_elements)} direct download links")
+                            story_items = download_links_elements                # Process stories sequentially (from old_downloader - more reliable)
                 for index, item in enumerate(story_items):
                     profile_logger.info(f"Processing story {index + 1}/{len(story_items)}")
                     
