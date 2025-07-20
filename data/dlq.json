@@ -1,80 +1,64 @@
-[
-  {
-    "chat_id": "-4841161517",
-    "file_path": "downloads\\israel_bidur\\story_israel_bidur_3674265343001611371.mp4",
-    "error": "Timed out",
-    "timestamp": "2025-07-12 14:44:54"
-  },
-  {
-    "chat_id": "-4841161517",
-    "file_path": "downloads\\israel_bidur\\story_israel_bidur_3674299762005266188.mp4",
-    "error": "Timed out",
-    "timestamp": "2025-07-12 14:45:53"
-  },
-  {
-    "chat_id": "-4841161517",
-    "file_path": "downloads\\israel_bidur\\story_israel_bidur_3675230642009981413.mp4",
-    "error": "Timed out",
-    "timestamp": "2025-07-12 21:26:23"
-  },
-  {
-    "chat_id": "-4841161517",
-    "file_path": "downloads\\israel_bidur\\story_israel_bidur_3675233874685887765.mp4",
-    "error": "Timed out",
-    "timestamp": "2025-07-12 21:27:54"
-  },
-  {
-    "chat_id": "-4841161517",
-    "file_path": "downloads\\israel_bidur\\story_israel_bidur_3675234716096911165.mp4",
-    "error": "Timed out",
-    "timestamp": "2025-07-12 21:29:39"
-  },
-  {
-    "chat_id": "-4841161517",
-    "file_path": "downloads\\***REMOVED***\\story_***REMOVED***_3675232135918892180.mp4",
-    "error": "Timed out",
-    "timestamp": "2025-07-12 21:39:28"
-  },
-  {
-    "chat_id": "-4841161517",
-    "file_path": "downloads\\***REMOVED***\\story_***REMOVED***_3675240795210265396.mp4",
-    "error": "Timed out",
-    "timestamp": "2025-07-12 21:40:51"
-  },
-  {
-    "chat_id": "-4841161517",
-    "file_path": "downloads\\***REMOVED***\\story_***REMOVED***_3675240795210265396.mp4",
-    "error": "Timed out",
-    "timestamp": "2025-07-12 22:10:43"
-  },
-  {
-    "chat_id": "-4841161517",
-    "file_path": "downloads\\makocelebs\\story_makocelebs_3675898861779492258.mp4",
-    "error": "Timed out",
-    "timestamp": "2025-07-13 22:33:35"
-  },
-  {
-    "chat_id": "-4841161517",
-    "file_path": "downloads\\makocelebs\\story_makocelebs_3675893981320959153.mp4",
-    "error": "Timed out",
-    "timestamp": "2025-07-14 15:29:16"
-  },
-  {
-    "chat_id": "-4841161517",
-    "file_path": "downloads\\makocelebs\\story_makocelebs_3675997807650583184.mp4",
-    "error": "Timed out",
-    "timestamp": "2025-07-14 15:31:25"
-  },
-  {
-    "chat_id": "-4841161517",
-    "file_path": "downloads\\makocelebs\\story_makocelebs_3676023780290855602.mp4",
-    "error": "Timed out",
-    "timestamp": "2025-07-14 15:35:42"
-  },
-  {
-    "chat_id": "-4841161517",
-    "file_path": "downloads\\israel_bidur\\story_israel_bidur_3676438987799642684.mp4",
-    "error": "Timed out",
-    "timestamp": "2025-07-14 16:14:04"
-  }
-]
+{
+  "-4841161517": [
+    {
+      "chat_id": "-4841161517",
+      "file_path": "downloads\\israel_bidur\\story_israel_bidur_3675233874685887765.mp4",
+      "error": "Timed out",
+      "timestamp": "2025-07-12 21:27:54"
+    },
+    {
+      "chat_id": "-4841161517",
+      "file_path": "downloads\\israel_bidur\\story_israel_bidur_3675234716096911165.mp4",
+      "error": "Timed out",
+      "timestamp": "2025-07-12 21:29:39"
+    },
+    {
+      "chat_id": "-4841161517",
+      "file_path": "downloads\\***REMOVED***\\story_***REMOVED***_3675232135918892180.mp4",
+      "error": "Timed out",
+      "timestamp": "2025-07-12 21:39:28"
+    },
+    {
+      "chat_id": "-4841161517",
+      "file_path": "downloads\\***REMOVED***\\story_***REMOVED***_3675240795210265396.mp4",
+      "error": "Timed out",
+      "timestamp": "2025-07-12 21:40:51"
+    },
+    {
+      "chat_id": "-4841161517",
+      "file_path": "downloads\\***REMOVED***\\story_***REMOVED***_3675240795210265396.mp4",
+      "error": "Timed out",
+      "timestamp": "2025-07-12 22:10:43"
+    },
+    {
+      "chat_id": "-4841161517",
+      "file_path": "downloads\\makocelebs\\story_makocelebs_3675898861779492258.mp4",
+      "error": "Timed out",
+      "timestamp": "2025-07-13 22:33:35"
+    },
+    {
+      "chat_id": "-4841161517",
+      "file_path": "downloads\\makocelebs\\story_makocelebs_3675893981320959153.mp4",
+      "error": "Timed out",
+      "timestamp": "2025-07-14 15:29:16"
+    },
+    {
+      "chat_id": "-4841161517",
+      "file_path": "downloads\\makocelebs\\story_makocelebs_3675997807650583184.mp4",
+      "error": "Timed out",
+      "timestamp": "2025-07-14 15:31:25"
+    },
+    {
+      "chat_id": "-4841161517",
+      "file_path": "downloads\\makocelebs\\story_makocelebs_3676023780290855602.mp4",
+      "error": "Timed out",
+      "timestamp": "2025-07-14 15:35:42"
+    },
+    {
+      "chat_id": "-4841161517",
+      "file_path": "downloads\\israel_bidur\\story_israel_bidur_3676438987799642684.mp4",
+      "error": "Timed out",
+      "timestamp": "2025-07-14 16:14:04"
+    }
+  ]
+}

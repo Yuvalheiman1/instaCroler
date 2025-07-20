@@ -28,6 +28,7 @@ RUN mkdir -p downloads data && \
 
 # Set permissions
 RUN chmod +x railway_postinstall.sh
+RUN chmod +x start.sh
 
 # Install Playwright browser
 RUN /opt/venv/bin/python -m playwright install chromium
@@ -36,5 +37,5 @@ RUN /opt/venv/bin/python -m playwright install chromium
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONPATH="/app:$PYTHONPATH"
 
-# Default start command (runs the main bot)
-CMD ["python", "bot_main.py"]
+# Use the start script as the entry point
+CMD ["./start.sh"]
