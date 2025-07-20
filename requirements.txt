@@ -2,3 +2,4 @@ python-telegram-bot
 playwright
 redis
 loguru
+python-dotenv
