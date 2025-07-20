@@ -51,23 +51,16 @@ Now, we will deploy the *same repository* again as a new service for the scraper
     *   `TELEGRAM_CHAT_ID`: The same chat ID as the bot service.
     *   `PYTHONUNBUFFERED`: Set this to `1`.
 
-### Step 3: Configure a Persistent Volume (Crucial for Data Saving)
+### Step 3: Provision a Redis Database (Crucial for Data Saving)
 
-To ensure that your list of monitored profiles, the pause flag, and other data persists across restarts and is shared between both services, you must create and attach a volume.
+To ensure that your list of monitored profiles, the pause flag, and other data persists across restarts and is shared between both services, you must provision a Redis database.
 
-1.  In your Railway project, click the **New** button and select **Volume**.
-2.  A new volume will be created. You can leave the name as is or rename it (e.g., `instacroler-data`).
-3.  Now, attach this volume to both services:
-    *   Go to your **bot service** (`instacroler-bot`).
-    *   Click on the **Settings** tab and find the **Volumes** section.
-    *   Click **Attach Volume** and select the volume you just created.
-    *   Set the **Mount Path** to `/app/data`. This tells Railway to link the persistent volume to the `data` directory inside your container.
-4.  Repeat the exact same process for your **scraper service** (`instacroler-scraper`):
-    *   Go to its **Settings** -> **Volumes**.
-    *   Attach the **same volume**.
-    *   Set the **Mount Path** to `/app/data`.
+1.  In your Railway project dashboard, click the **New** button and select **Database**.
+2.  Choose **Redis** from the list of available databases.
+3.  Railway will create a new Redis service within your project.
+4.  **Crucially, Railway will automatically inject the connection string as a `REDIS_URL` environment variable into both your `instacroler-bot` and `instacroler-scraper` services.**
 
-By mounting the same volume to `/app/data` in both services, they will now share the same persistent directory for all their data.
+That's it! The application code is already configured to detect and use this `REDIS_URL` variable to connect to the database. No further steps are needed to link the services.
 
 ## How It Works
 
@@ -76,7 +69,7 @@ By mounting the same volume to `/app/data` in both services, they will now share
 
 ## Managing Your Bot
 
--   **Adding/Removing Profiles**: Interact with your bot on Telegram (`/add_profile`, `/remove_profile`). The changes are saved in `monitored_profiles.json` within a persistent volume that both services share.
--   **Pausing/Resuming**: Use `/pause` and `/resume`. This creates a `bot_paused.flag` file. The scraper service checks for this file at the start of each run and will skip scraping if it exists.
+-   **Adding/Removing Profiles**: Interact with your bot on Telegram (`/add_profile`, `/remove_profile`). The changes are saved in the shared Redis database.
+-   **Pausing/Resuming**: Use `/pause` and `/resume`. This sets a flag in the Redis database. The scraper service checks for this flag at the start of each run and will skip scraping if it exists.
 
 You now have a fully functional and correctly deployed bot and scraper!
