@@ -28,7 +28,7 @@ class Config:
         'scroll_delay': 1200,
         'download_delay': 500,
         'retry_base_delay': 1000,
-        'browser_launch_delay': 2000
+        'browser_launch_delay': 5000  # Increased to 5 seconds to reduce conflicts
     }
     
     # Download settings
@@ -37,8 +37,8 @@ class Config:
         'max_lazy_load_attempts': 15,
         'chunk_size': 8192,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'max_concurrent_workers': 5,
-        'max_concurrent_downloads': 3,
+        'max_concurrent_workers': 2,  # Reduced from 5 to 2 to prevent page crashes
+        'max_concurrent_downloads': 2,  # Also reduced to be safer
         'enable_concurrent': True,
         'browser_launch_stagger': True,
         'slow_connection_mode': False

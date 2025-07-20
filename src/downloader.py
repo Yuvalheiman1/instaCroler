@@ -139,16 +139,27 @@ class AnonyigDownloader:
         profile_logger.info(f"Last known ID: {last_seen_story_id}, Initial ID to check: {initial_id_to_check}")
 
         async with async_playwright() as p:
-            # Optimize browser for slow connections (from copy version)
-            browser_args = ['--disable-web-security', '--disable-features=VizDisplayCompositor']
+            # Optimize browser for constrained environments (reduced memory usage)
+            browser_args = [
+                '--disable-web-security', 
+                '--disable-features=VizDisplayCompositor',
+                '--disable-background-networking',
+                '--disable-background-timer-throttling',
+                '--disable-renderer-backgrounding',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-dev-shm-usage',
+                '--no-sandbox',
+                '--disable-gpu',
+                '--memory-pressure-off',
+                '--disable-extensions',
+                '--disable-plugins'
+            ]
+            
+            # Additional conservative args for stability
             if Config.DOWNLOAD_SETTINGS.get('slow_connection_mode', False):
                 browser_args.extend([
-                    '--disable-background-networking',
-                    '--disable-background-timer-throttling',
-                    '--disable-renderer-backgrounding',
-                    '--disable-backgrounding-occluded-windows',
-                    '--disable-dev-shm-usage',
-                    '--no-sandbox'
+                    '--aggressive-cache-discard',
+                    '--disable-background-mode'
                 ])
             
             browser = await p.chromium.launch(
@@ -171,6 +182,10 @@ class AnonyigDownloader:
             ))
             
             page = await context.new_page()
+            
+            # Add page crash handler
+            page.on("crash", lambda: profile_logger.error(f"Page crashed for {username}"))
+            
             profile_logger.info("Browser started, recording video...")
             
             try:
@@ -462,10 +477,16 @@ class ConcurrentDownloader:
                     self.logger.info(f"Worker {worker_id} completed for profile: {username} - {len(results)} stories downloaded")
                     return username, results, newest_id
                 except Exception as e:
-                    self.logger.warning(f"Worker {worker_id} attempt {attempt + 1} failed for profile {username}: {e}")
-                    if attempt < max_retries - 1:
-                        # Exponential backoff with jitter
+                    error_msg = str(e).lower()
+                    if "page crashed" in error_msg or "crash" in error_msg:
+                        self.logger.error(f"Worker {worker_id} page crashed for profile {username} (attempt {attempt + 1})")
+                        # Longer wait for page crashes to allow system to recover
+                        wait_time = (3 ** attempt) + (worker_id * 2.0)  # Exponential backoff with longer delays
+                    else:
+                        self.logger.warning(f"Worker {worker_id} attempt {attempt + 1} failed for profile {username}: {e}")
                         wait_time = (2 ** attempt) + (worker_id * 0.5)  # Add worker-specific jitter
+                    
+                    if attempt < max_retries - 1:
                         self.logger.info(f"Retrying {username} in {wait_time:.1f} seconds...")
                         await asyncio.sleep(wait_time)
                     else:
