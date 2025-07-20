@@ -21,14 +21,14 @@ class Config:
     
     # Timeouts and delays (in milliseconds)
     TIMEOUTS = {
-        'page_load': 60000,
-        'element_wait': 30000,
+        'page_load': 45000,         # Reduced from 60s to 45s
+        'element_wait': 20000,      # Reduced from 30s to 20s
         'search_delay': 1500,
         'stories_tab_delay': 1200,
         'scroll_delay': 1200,
         'download_delay': 500,
         'retry_base_delay': 1000,
-        'browser_launch_delay': 5000  # Increased to 5 seconds to reduce conflicts
+        'browser_launch_delay': 5000
     }
     
     # Download settings

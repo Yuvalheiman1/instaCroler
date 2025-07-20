@@ -34,10 +34,23 @@ class AnonyigDownloader:
         max_attempts = Config.DOWNLOAD_SETTINGS['max_lazy_load_attempts']
         scroll_delay = Config.TIMEOUTS['scroll_delay']
         
+        # Add timeout to prevent hanging
+        start_time = time.time()
+        max_lazy_load_time = 60  # Maximum 60 seconds for lazy loading
+        
         for attempt in range(max_attempts):
+            # Check timeout
+            if time.time() - start_time > max_lazy_load_time:
+                self.logger.warning(f"Lazy loading timeout after {max_lazy_load_time} seconds")
+                break
+                
             # Count current stories
-            current_stories = await page.query_selector_all(Config.SELECTORS['story_items'])
-            current_count = len(current_stories)
+            try:
+                current_stories = await page.query_selector_all(Config.SELECTORS['story_items'])
+                current_count = len(current_stories)
+            except Exception as count_error:
+                self.logger.warning(f"Error counting stories on attempt {attempt + 1}: {count_error}")
+                current_count = 0
             
             self.logger.debug(f"Lazy load attempt {attempt + 1}: {current_count} stories found")
             
@@ -68,8 +81,12 @@ class AnonyigDownloader:
             
             await page.wait_for_timeout(scroll_delay)
         
-        final_count = len(await page.query_selector_all(Config.SELECTORS['story_items']))
-        self.logger.info(f"Lazy loading complete. Final story count: {final_count}")
+        try:
+            final_count = len(await page.query_selector_all(Config.SELECTORS['story_items']))
+            self.logger.info(f"Lazy loading complete. Final story count: {final_count}")
+        except Exception as final_count_error:
+            self.logger.warning(f"Error getting final count: {final_count_error}")
+            self.logger.info("Lazy loading complete (count unknown)")
 
     async def _download_with_retry(self, url: str, save_path: str, profile_logger, max_retries: int = 3) -> bool:
         """
@@ -216,34 +233,162 @@ class AnonyigDownloader:
                     await search_input.press('Enter')
                     profile_logger.info("Pressed Enter to search.")
                     await page.wait_for_timeout(Config.TIMEOUTS['search_delay'])
+                    
+                    # Check if search worked by looking for URL change or content change
+                    current_url = page.url
+                    profile_logger.info(f"URL after search: {current_url}")
+                    
+                    # Wait a bit more and check if we're on a profile page
+                    await page.wait_for_timeout(2000)
+                    final_url = page.url
+                    profile_logger.info(f"Final URL: {final_url}")
+                    
+                    # Check if URL changed or if we found profile content
+                    if username.lower() in final_url.lower() or current_url != final_url:
+                        profile_logger.info("Search appears to have worked - URL changed or contains username")
+                    else:
+                        profile_logger.warning("Search may not have worked - trying alternative approach")
+                        # Try clicking search button if it exists
+                        try:
+                            search_btn = await page.query_selector('button[type="submit"], .search-btn, input[type="submit"]')
+                            if search_btn:
+                                profile_logger.info("Found search button, clicking...")
+                                await search_btn.click()
+                                await page.wait_for_timeout(3000)
+                        except Exception as btn_error:
+                            profile_logger.debug(f"Search button click failed: {btn_error}")
                 else:
                     profile_logger.error("Search input not found!")
                     return results, newest_id_found
 
                 # Click the stories tab button
                 profile_logger.info("Clicking stories tab button...")
-                try:
-                    stories_tab = await page.wait_for_selector(
-                        Config.SELECTORS['stories_tab'], 
-                        timeout=Config.TIMEOUTS['element_wait']
-                    )
-                    await stories_tab.click()
-                    profile_logger.info("Stories tab button clicked.")
-                    await page.wait_for_timeout(Config.TIMEOUTS['stories_tab_delay'])
-                except Exception as e:
-                    profile_logger.warning(f"Stories tab button not found or not clickable: {e}")
+                stories_tab_found = False
+                
+                # Try multiple approaches to find and click the stories tab
+                stories_tab_selectors = [
+                    Config.SELECTORS['stories_tab'],  # 'button.tabs-component__button:has-text("stories")'
+                    'button:has-text("Stories")',
+                    'button:has-text("stories")', 
+                    'button:has-text("STORIES")',
+                    '.tabs-component__button:has-text("stories")',
+                    '.tab-button',
+                    '[data-tab="stories"]',
+                    'a[href*="stories"]',
+                    'button[role="tab"]'
+                ]
+                
+                for selector in stories_tab_selectors:
+                    try:
+                        profile_logger.debug(f"Trying stories tab selector: {selector}")
+                        stories_tab = await page.wait_for_selector(selector, timeout=5000)
+                        if stories_tab:
+                            # Check if it's visible and clickable
+                            is_visible = await stories_tab.is_visible()
+                            if is_visible:
+                                await stories_tab.click()
+                                profile_logger.info(f"Stories tab clicked using selector: {selector}")
+                                await page.wait_for_timeout(Config.TIMEOUTS['stories_tab_delay'])
+                                stories_tab_found = True
+                                break
+                    except Exception as tab_error:
+                        profile_logger.debug(f"Selector {selector} failed: {tab_error}")
+                        continue
+                
+                if not stories_tab_found:
+                    profile_logger.warning("Stories tab not found with any selector")
+                    # Check if stories are already visible without clicking tab
+                    existing_stories = await page.query_selector_all(Config.SELECTORS['story_items'])
+                    if existing_stories:
+                        profile_logger.info(f"Found {len(existing_stories)} stories already visible, proceeding without tab click")
+                    else:
+                        # Try direct navigation to stories section
+                        try:
+                            current_url = page.url
+                            if not current_url.endswith('/stories'):
+                                stories_url = current_url.rstrip('/') + '/stories'
+                                profile_logger.info(f"Trying direct navigation to: {stories_url}")
+                                await page.goto(stories_url, timeout=15000)
+                                await page.wait_for_timeout(2000)
+                        except Exception as nav_error:
+                            profile_logger.warning(f"Direct navigation failed: {nav_error}")
 
                 # Wait for stories container to appear
                 profile_logger.info("Waiting for stories container to appear...")
-                await page.wait_for_selector(Config.SELECTORS['stories_container'], timeout=Config.TIMEOUTS['element_wait'])
+                container_found = False
+                
+                # Try multiple selectors for the stories container with shorter timeouts
+                container_selectors = [
+                    Config.SELECTORS['stories_container'],  # '.output-profile'
+                    '.profile-content',
+                    '.user-profile', 
+                    'ul.profile-media-list',
+                    '.media-container',
+                    '.stories-container',
+                    '.profile-media'
+                ]
+                
+                for selector in container_selectors:
+                    try:
+                        profile_logger.debug(f"Trying container selector: {selector}")
+                        await page.wait_for_selector(selector, timeout=10000)  # Shorter timeout per selector
+                        profile_logger.info(f"Found stories container with: {selector}")
+                        container_found = True
+                        break
+                    except Exception as container_error:
+                        profile_logger.debug(f"Container selector {selector} failed: {container_error}")
+                        continue
+                
+                if not container_found:
+                    profile_logger.warning("Stories container not found with any selector")
+                    # Check page content to understand what's there
+                    page_text = await page.text_content('body')
+                    profile_logger.debug(f"Page contains text: {page_text[:200]}...")
+                    
+                    # Check if there are any obvious error messages
+                    if any(error_text in page_text.lower() for error_text in ['not found', 'error', 'private', 'does not exist']):
+                        profile_logger.warning("Page seems to contain error message")
+                        
+                    # Save debug info
+                    debug_path = os.path.join(Config.DIRECTORIES['debug_videos'], f"debug_stuck_{username}.html")
+                    page_html = await page.content()
+                    with open(debug_path, 'w', encoding='utf-8') as f:
+                        f.write(page_html)
+                    profile_logger.info(f"Saved debug HTML to: {debug_path}")
+                    
+                    # Continue anyway - maybe stories are there but container selector is wrong
 
                 # Scroll and load all stories with lazy loading
                 profile_logger.info("Loading all stories with lazy loading...")
                 await self._load_all_stories(page)
 
-                # Collect all story items - refresh the list to avoid stale references
-                story_items = await page.query_selector_all(Config.SELECTORS['story_items'])
-                profile_logger.info(f"Found {len(story_items)} stories for {username}.")
+                # Collect all story items - try multiple selectors
+                story_items = []
+                story_selectors = [
+                    Config.SELECTORS['story_items'],  # 'ul.profile-media-list > li.profile-media-list__item'
+                    'ul.profile-media-list > li',
+                    '.profile-media-list__item',
+                    '.story-item',
+                    '.media-item',
+                    'li[data-media]',
+                    'li:has(.button__download)',
+                    'li:has(a[href*="download"])',
+                    'li:has(img)',
+                    'li:has(video)'
+                ]
+                
+                for selector in story_selectors:
+                    try:
+                        items = await page.query_selector_all(selector)
+                        if items:
+                            story_items = items
+                            profile_logger.info(f"Found {len(story_items)} stories using selector: {selector}")
+                            break
+                    except Exception as selector_error:
+                        profile_logger.debug(f"Selector {selector} failed: {selector_error}")
+                        continue
+                
+                profile_logger.info(f"Total stories found for {username}: {len(story_items)}")
                 
                 if len(story_items) == 0:
                     profile_logger.warning("No stories found. Performing comprehensive page analysis...")
