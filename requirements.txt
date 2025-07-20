@@ -3,3 +3,4 @@ playwright
 redis
 loguru
 python-dotenv
+requests
