@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Tuple, Optional
 from dotenv import load_dotenv
+from telegram import Bot
 
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
@@ -28,12 +29,12 @@ class StoryScraper:
         self.logger = get_logger()
         self.db = db
         self.downloader = AnonyigDownloader()
-        self.chat_id = int(os.getenv('TELEGRAM_CHAT_ID'))
         self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
         
-        if not self.chat_id or not self.bot_token:
-            raise ValueError("TELEGRAM_CHAT_ID and TELEGRAM_BOT_TOKEN must be set")
+        if not self.bot_token:
+            raise ValueError("TELEGRAM_BOT_TOKEN must be set")
         
+        self.bot = Bot(token=self.bot_token)
         self.max_retries = Config.DOWNLOAD_SETTINGS.get('max_retries', 3)
         self.retry_delay = Config.DOWNLOAD_SETTINGS.get('retry_delay', 5)
         
@@ -144,14 +145,14 @@ class StoryScraper:
                 self.logger.info(f"Sending {media_type} from {username} to chat {chat_id}. Attempt {attempt + 1}.")
                 
                 if media_type == 'image':
-                    await self.downloader.bot.send_photo(
+                    await self.bot.send_photo(
                         chat_id=chat_id,
                         photo=open(media_path, 'rb'),
                         caption=caption,
                         parse_mode='HTML'
                     )
                 elif media_type == 'video':
-                    await self.downloader.bot.send_video(
+                    await self.bot.send_video(
                         chat_id=chat_id,
                         video=open(media_path, 'rb'),
                         caption=caption,
@@ -192,6 +193,7 @@ async def main():
         scraper.logger.critical(f"A critical error occurred: {e}")
     finally:
         await scraper.downloader.close_browser()
+        await scraper.bot.close()
         scraper.logger.info("Scraper run finished.")
 
 if __name__ == "__main__":

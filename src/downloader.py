@@ -3,32 +3,22 @@ import requests
 import time
 from typing import List, Dict, Optional
 from datetime import datetime
-from playwright.async_api import async_playwright
-from urllib.parse import urlparse, parse_qs
+from playwright.async_api import async_playwright, Browser, Page, Playwright
 from .config import Config
 from .logger import get_logger, log_info, log_error, log_warning, log_debug, get_profile_logger
-from telegram import Bot
 
 class AnonyigDownloader:
     """
     A class to download Instagram stories anonymously using a website.
     It uses Playwright for browser automation.
     """
-    def __init__(self, download_dir=None):
-            """
-            Initializes the downloader and creates the main download directory.
-            """
-            self.download_dir = download_dir or Config.DIRECTORIES['downloads']
-            self.logger = get_logger()
-            os.makedirs(self.download_dir, exist_ok=True)
-            
-            # Initialize browser attributes to None
-            self.playwright = None
-            self.browser = None
-            self.page = None
-            self.bot = None # If you are creating a bot instance here
-            
-            self.logger.info(f"AnonyigDownloader initialized with download_dir: {self.download_dir}")
+    def __init__(self):
+        """Initializes the downloader."""
+        self.logger = get_logger()
+        self.playwright: Playwright | None = None
+        self.browser: Browser | None = None
+        self.page: Page | None = None
+        self.logger.info("AnonyigDownloader initialized")
 
     def _extract_story_id(self, data_id: str) -> str:
         """
@@ -340,7 +330,6 @@ class AnonyigDownloader:
             self.playwright = await async_playwright().start()
             self.browser = await self.playwright.chromium.launch(headless=True)
             self.page = await self.browser.new_page()
-            self.bot = Bot(token=self.bot_token)
             self.logger.info("Playwright browser started successfully.")
         except Exception as e:
             self.logger.error(f"Failed to start browser: {e}")
@@ -354,8 +343,6 @@ class AnonyigDownloader:
             await self.browser.close()
         if self.playwright:
             await self.playwright.stop()
-        if self.bot:
-            await self.bot.close()
         self.logger.info("Playwright browser closed.")
 
     async def download_user_stories(self, username: str, last_seen_story_id: Optional[str] = None) -> List[Dict[str, str]]:
