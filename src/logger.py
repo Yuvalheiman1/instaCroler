@@ -4,7 +4,12 @@ Logging configuration for Instagram Story Scraper
 import logging
 import os
 from datetime import datetime
-from .config import Config
+
+try:
+    from .config import Config
+except ImportError:
+    # Handle direct execution
+    from config import Config
 
 class ProfileLogger:
     """Logger with profile context"""
@@ -54,17 +59,48 @@ class Logger:
         # Create formatters
         formatter = logging.Formatter(Config.LOG_FORMAT)
         
-        # File handler (rotating daily)
+        # File handler (rotating daily) - UTF-8 encoding
         log_filename = f"scraper_{datetime.now().strftime('%Y%m%d')}.log"
         log_path = os.path.join(Config.DIRECTORIES['logs'], log_filename)
-        file_handler = logging.FileHandler(log_path)
+        file_handler = logging.FileHandler(log_path, encoding='utf-8')
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)
         
-        # Console handler
+        # Console handler with Windows-compatible encoding
         console_handler = logging.StreamHandler()
         console_handler.setLevel(getattr(logging, Config.LOG_LEVEL))
-        console_handler.setFormatter(formatter)
+        
+        # Create a custom formatter that replaces problematic Unicode characters
+        class WindowsCompatibleFormatter(logging.Formatter):
+            def format(self, record):
+                msg = super().format(record)
+                # Replace common problematic emoji/unicode chars for Windows console
+                emoji_replacements = {
+                    '✅': '[OK]',
+                    '❌': '[ERROR]',
+                    '⚠️': '[WARNING]', 
+                    '🎉': '[SUCCESS]',
+                    '🚀': '[START]',
+                    '📋': '[LIST]',
+                    '🔄': '[RUNNING]',
+                    '⏸️': '[PAUSED]',
+                    '📊': '[STATS]',
+                    '🟦': '[ANONYIG]',
+                    '🟩': '[INSTA]',
+                    '🏆': '[BEST]',
+                    '📈': '[TOTAL]',
+                    '🧪': '[TEST]',
+                    '🔍': '[SEARCH]',
+                    '💥': '[FATAL]',
+                    '⏹️': '[STOP]',
+                    '⏰': '[TIME]'
+                }
+                for emoji, replacement in emoji_replacements.items():
+                    msg = msg.replace(emoji, replacement)
+                return msg
+        
+        windows_formatter = WindowsCompatibleFormatter(Config.LOG_FORMAT)
+        console_handler.setFormatter(windows_formatter)
         
         # Add handlers
         self.logger.addHandler(file_handler)

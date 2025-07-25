@@ -3,34 +3,58 @@ Configuration file for Instagram Story Scraper
 """
 import os
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not available, use system env vars
+
 class Config:
-    # Site configuration
-    BASE_URL = "https://anonyig.com/en/"
+    # Support for both insta-stories-viewer.com and anonyig.com
     
-    # Selectors (easily updatable when site changes)
-    SELECTORS = {
-        'search_input': 'input.search.search-form__input',
-        'stories_tab': 'button.tabs-component__button:has-text("stories")',
-        'stories_container': '.output-profile',
-        'story_items': 'ul.profile-media-list > li.profile-media-list__item',
-        'download_button': '.button.button--filled.button__download',
-        'media_content': '.media-content, .profile-media-list__item img, .profile-media-list__item video',
-        'media_container': '.media-content',
-        'lazy_load_triggers': '.hide-content__btn, .load-more-btn, .trigger',
-        'download_link': 'a.button__download[href]'
+    # Smart downloader settings - now supports comparison between sources
+    SMART_DOWNLOAD = {
+        'enabled': True,  # Now compares between sources
+        'count_timeout': 30,  # seconds for counting stories
+        'prefer_anonyig': False,  # Set to True to prefer anonyig when counts are equal
     }
     
-    # Timeouts and delays (in milliseconds)
+    # Selectors for both sources
+    SELECTORS = {
+        # insta-stories-viewer.com specific selectors
+        'insta_stories': {
+            'stories_container': 'ul.profile__tabs-media.profile__stories',
+            'story_items': 'ul.profile__tabs-media.profile__stories > li.profile__tabs-media-item',
+            'story_link': 'span.profile__tabs-media-item-link',
+        },
+        # anonyig.com specific selectors
+        'anonyig': {
+            'search_textbox': '@username or link',
+            'search_button': 'button[text=""]',  # Empty text button
+            'stories_button': 'button[name="stories"]',
+            'story_items': 'li > .media-content__info > .button',
+            'download_link': 'a[href*="download"], .download-btn, [download]',
+        }
+    }
+    
+    # Timeouts and delays (in milliseconds) - optimized for both sources
     TIMEOUTS = {
-        'page_load': 30000,         # Reduced from 60s to 45s
-        'element_wait': 20000,      # Reduced from 30s to 20s
-        'search_delay': 1500,
-        'stories_tab_delay': 1200,
-        'scroll_delay': 1200,
+        'page_load': 30000,         # 30 seconds for page loading
+        'element_wait': 20000,      # 20 seconds for elements to appear
+        'search_delay': 2000,       # 2 seconds after search input
+        'stories_tab_delay': 2000,  # 2 seconds after clicking stories tab
+        'lazy_load_wait': 5000,     # 5 seconds for lazy loading content
+        'lazy_load_scroll_delay': 1000,  # 1 second between lazy load scrolls
+        'scroll_delay': 1000,       # 1 second between scrolls
         'download_delay': 500,
         'retry_base_delay': 1000,
         'browser_launch_delay': 5000,
-        'download': 30000           # 30 seconds for file downloads
+        'download': 30000,          # 30 seconds for file downloads
+        'new_page_wait': 10000,     # 10 seconds for new pages to load
+        'anonyig_story_delay': 500, # Delay between story processing on anonyig
+        'anonyig_lazy_load_max_scrolls': 10,  # Max scrolls for lazy loading
+        'anonyig_lazy_load_scroll_step': 500,  # Pixels per scroll step
     }
     
     # Download settings
@@ -54,6 +78,12 @@ class Config:
         'image': '.jpg',
         'supported_video': ['.mp4', '.mov', '.avi'],
         'supported_image': ['.jpg', '.jpeg', '.png', '.webp']
+    }
+    
+    # File extensions for different media types
+    FILE_EXTENSIONS = {
+        'video': '.mp4',
+        'image': '.jpg'
     }
     
     # Directories

@@ -4,6 +4,13 @@ import json
 import logging
 from datetime import datetime
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not available, use system env vars
+
 try:
     from .config import Config
 except ImportError:
@@ -177,9 +184,54 @@ class RedisManager:
             dlq = dlq[-100:]
             self.redis.set("dlq", json.dumps(dlq))
             return True
-        except (redis.exceptions.RedisError, json.JSONEncodeError) as e:
+        except (redis.exceptions.RedisError, json.JSONDecodeError) as e:
             logger.error(f"Error adding item to DLQ: {e}")
             return False
+    
+    # --- Additional Methods for Scheduler ---
+    def get_all_monitored_profiles(self):
+        """Get all monitored profiles organized by chat_id"""
+        return self.get_all_profiles()
+    
+    def is_bot_paused(self):
+        """Check if bot is paused (alias for is_paused)"""
+        return self.is_paused()
+    
+    def update_profile_last_check(self, chat_id, username, timestamp):
+        """Update the last check timestamp for a profile"""
+        try:
+            profiles_data = self.get_all_profiles()
+            chat_id = str(chat_id)
+            
+            if chat_id in profiles_data and username in profiles_data[chat_id]:
+                profiles_data[chat_id][username]['last_check'] = timestamp
+                self.save_all_profiles(profiles_data)
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error updating last check for {username}: {e}")
+            return False
+    
+    def health_check(self):
+        """Perform a health check on Redis connection"""
+        try:
+            self.redis.ping()
+            return True
+        except Exception as e:
+            logger.error(f"Redis health check failed: {e}")
+            return False
 
-# Singleton instance
-db = RedisManager()
+# Singleton instance - only create if REDIS_URL is available
+db = None
+try:
+    if os.getenv("REDIS_URL"):
+        db = RedisManager()
+    else:
+        logger.warning("REDIS_URL not set - Redis functionality disabled")
+        db = None
+except Exception as e:
+    logger.error(f"Failed to initialize Redis: {e}")
+    db = None
+
+# Alias for compatibility with scheduler
+Database = RedisManager

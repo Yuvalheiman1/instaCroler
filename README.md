@@ -14,13 +14,15 @@ A robust Python-based Telegram bot that monitors Instagram stories and sends new
 - � **Status Monitoring**: Real-time status and statistics
 - �️ **Redis Storage**: Fast, persistent storage with Redis database
 - 🧹 **Error Handling**: Dead Letter Queue for failed operations
-- � **Comprehensive Logging**: Detailed logs for debugging and monitoring
+- � **Comprehensive Logging**: Detailed logs for debugging and monitoring, also through screen recording
+- 🔄 **FIFO Queue Processing**: Efficient piping system for optimal task management
+- ⚡ **Multi-Worker Architecture**: Multiple workers for faster and more efficient processing
 
 ---
 
 ## 🏗️ Architecture
 
-The bot is split into two main components:
+The bot is split into two main components with a multi-worker, queue-based architecture:
 
 ### 1. **Main Bot** (`bot_main.py`)
 - Handles Telegram user interaction
@@ -34,6 +36,12 @@ The bot is split into two main components:
 - Downloads and sends new content
 - Updates tracking data
 
+### 3. **Multi-Worker Processing**
+- **FIFO Queue System**: Efficient task queuing using First-In-First-Out piping for optimal resource management
+- **Parallel Workers**: Multiple worker threads process downloads and uploads simultaneously
+- **Load Balancing**: Distributes tasks across workers for maximum efficiency
+- **Resource Optimization**: Smart allocation prevents bottlenecks and improves response times
+
 ---
 
 ## 🧱 Project Structure
@@ -41,14 +49,14 @@ The bot is split into two main components:
 | File/Folder              | Purpose |
 |--------------------------|---------|
 | `bot_main.py`            | Main Telegram bot for user interaction |
-| `run_scraper.py`         | Scheduled scraper (runs via Railway Cron) |
-| `setup_local.py`         | Quick setup script for local development |
-| `migrate_to_redis.py`    | Migration script from JSON to Redis |
+| `run_scraper.py`         | Scheduled scraper with multi-worker processing (runs via Railway Cron) |
 | `redis_health_check.py`  | Redis connection and health diagnostics |
-| `src/downloader.py`      | Instagram story scraping logic |
-| `src/database.py`        | Redis database management |
-| `src/config.py`          | Configuration settings |
+| `src/downloader.py`      | Instagram story scraping logic with enhanced anonyig.com support |
+| `src/database.py`        | Redis database management with scheduler integration |
+| `src/config.py`          | Configuration settings with updated selectors |
 | `src/logger.py`          | Logging configuration |
+| `test_run_scraper.py`    | Test suite for scheduler functionality |
+| `test_profiles.py`       | Profile-specific testing utilities |
 | `dev_helper.py`          | Development and testing utilities |
 | `data/`                  | Persistent data storage |
 | `downloads/`             | Temporary story files |
@@ -57,111 +65,8 @@ The bot is split into two main components:
 | `Dockerfile`             | Docker configuration for Railway |
 | `railway_postinstall.sh` | Railway deployment script |
 
----
-
-## 📦 Installation
-
-### Quick Setup (Recommended)
-```bash
-# Clone and setup in one go
-git clone https://github.com/YOUR_USERNAME/instacroler.git
-cd instacroler
-python setup_local.py
-```
-
-### Manual Setup
-
-### 1. Clone the repository
-```bash
-git clone https://github.com/YOUR_USERNAME/instacroler.git
-cd instacroler
-```
-
-### 2. Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Set up environment variables
-Copy `.env.example` to `.env` and configure:
-
-**For Local Development:**
-```env
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-TELEGRAM_CHAT_ID=your_chat_id_here
-REDIS_URL=redis://localhost:6379
-LOG_LEVEL=INFO
-```
-
-**For Railway Deployment:**
-```env
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-TELEGRAM_CHAT_ID=your_chat_id_here
-# REDIS_URL will be provided automatically by Railway
-LOG_LEVEL=INFO
-```
-
-### 4. Set up Redis (for local development)
-
-**Option 1: Install Redis locally**
-```bash
-# Windows (using Chocolatey)
-choco install redis-64
-
-# macOS (using Homebrew)
-brew install redis
-
-# Ubuntu/Debian
-sudo apt install redis-server
-```
-
-**Option 2: Use Docker**
-```bash
-docker run -d --name redis -p 6379:6379 redis:alpine
-```
-
-### 5. Install Playwright browsers
-```bash
-playwright install chromium
-```
-
-### 6. Start Redis (local development only)
-```bash
-# If installed locally
-redis-server
-
-# If using Docker
-docker start redis
-```
-
-### 7. Test Redis connection
-```bash
-python redis_health_check.py
-```
-
-### 8. Migrate existing data (if upgrading)
-If you have existing JSON data files:
-```bash
-python migrate_to_redis.py
-```
 
 ---
-
-## 🏃 Usage
-
-### Local Development
-```bash
-# 1. Start Redis first (if not using Docker)
-redis-server
-
-# 2. Run the main bot
-python bot_main.py
-
-# 3. Run the scraper manually (for testing)
-python run_scraper.py
-```
-
-**Note**: For local development, you need Redis running. See the installation section above.
 
 ### Railway Deployment
 
@@ -189,11 +94,6 @@ python run_scraper.py
 ## 🔧 Configuration
 
 ### Storage Options
-
-**JSON Storage** (default):
-- Uses local JSON files in `data/` directory
-- Perfect for small deployments
-- No additional setup required
 
 **PostgreSQL Storage** (optional):
 - Set `DATABASE_URL` environment variable
@@ -309,16 +209,6 @@ Edit `src/config.py` to customize:
 - Check Redis connection in Railway logs
 - Verify Redis service has sufficient memory
 - Monitor Redis key expiration policies
-
-**Migration from JSON to Redis:**
-- Run `python migrate_to_redis.py` to migrate existing data
-- Use `python redis_health_check.py` to verify Redis connectivity
-- Original JSON files are backed up automatically during migration
-
-**Frequent failures:**
-- Profiles with too many failures (3+) are temporarily skipped
-- Use `/status` to see profile health
-- Check logs for specific error messages
 
 ### Debug Mode
 Set `LOG_LEVEL=DEBUG` for detailed logging.
