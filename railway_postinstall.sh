@@ -6,6 +6,7 @@ echo "🚀 Starting railway_postinstall.sh script..."
 # Ensure Playwright's Chromium browser and its system dependencies are installed
 # The --with-deps flag is crucial for server environments
 echo "📦 Installing Playwright Chromium browser with dependencies..."
+python -m playwright install chromium --with-deps
 
 # Print Python version for debug (good to keep)
 echo "🐍 Python version:"
