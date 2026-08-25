@@ -11,7 +11,6 @@ import logging
 import asyncio
 import traceback
 from datetime import datetime
-import concurrent.futures
 from argparse import ArgumentParser
 
 # Set up path for imports
@@ -98,8 +97,14 @@ async def process_profile(chat_id, username, profile_data):
         return False, 0, last_known_id
 
 # Main function to process all profiles
-async def process_all_profiles():
-    """Process all monitored profiles."""
+async def process_all_profiles(only_profile=None, only_chat=None):
+    """
+    Process the monitored profiles, one after another.
+
+    Args:
+        only_profile: If set, process only this Instagram username
+        only_chat: If set, process only the profiles of this Telegram chat ID
+    """
     if is_bot_paused():
         logger.info("Bot is currently paused. Skipping scrape.")
         return
@@ -111,10 +116,19 @@ async def process_all_profiles():
     if not profiles:
         logger.info("No profiles to monitor. Exiting.")
         return
-        
+
+    if only_chat is not None:
+        profiles = {k: v for k, v in profiles.items() if str(k) == str(only_chat)}
+        if not profiles:
+            logger.warning(f"No monitored profiles for chat {only_chat}. Exiting.")
+            return
+
     # Process each chat's profiles
     for chat_id, chat_profiles in profiles.items():
         for username, profile_data in chat_profiles.items():
+            if only_profile is not None and username != only_profile:
+                continue
+
             # Process the profile
             success, stories_count, new_last_id = await process_profile(chat_id, username, profile_data)
             
@@ -143,7 +157,7 @@ if __name__ == "__main__":
     
     try:
         # Run the scraper
-        asyncio.run(process_all_profiles())
+        asyncio.run(process_all_profiles(only_profile=args.profile, only_chat=args.chat))
     finally:
         # Ensure resources are cleaned up
         cleanup_resources()
