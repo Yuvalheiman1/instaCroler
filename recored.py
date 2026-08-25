@@ -1,7 +1,22 @@
+"""
+Manual Playwright walk-through of the anonyig.com download flow.
+
+A scratch script kept for debugging the selectors used by src/downloader.py.
+It opens a real browser window, so run it locally, not on the server.
+
+Usage:
+    python recored.py <instagram_username> [<instagram_username> ...]
+
+Or set INSTAGRAM_TEST_USERNAMES to a comma separated list.
+"""
+
+import os
 import re
+import sys
 from playwright.sync_api import Playwright
 
-def run(playwright: Playwright, username: str = "***REMOVED***") -> None:
+
+def run(playwright: Playwright, username: str) -> None:
     
     #open browser
     browser = playwright.chromium.launch(headless=False)
@@ -77,11 +92,21 @@ def run(playwright: Playwright, username: str = "***REMOVED***") -> None:
 
 if __name__ == "__main__":
     from playwright.sync_api import sync_playwright
-    
-    # Test with the profiles you mentioned
-    test_usernames = ["***REMOVED***", "***REMOVED***"]
-    
-    for username in test_usernames:
+
+    # Usernames come from the command line or INSTAGRAM_TEST_USERNAMES, never
+    # from a hardcoded handle.
+    usernames = sys.argv[1:]
+    if not usernames:
+        env_value = os.getenv("INSTAGRAM_TEST_USERNAMES", "")
+        usernames = [u.strip() for u in env_value.split(",") if u.strip()]
+
+    if not usernames:
+        print("No username given.")
+        print("Usage: python recored.py <instagram_username> [<instagram_username> ...]")
+        print("Or set INSTAGRAM_TEST_USERNAMES=user1,user2")
+        sys.exit(1)
+
+    for username in usernames:
         print(f"Testing download for: {username}")
         try:
             with sync_playwright() as playwright:
