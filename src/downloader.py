@@ -8,7 +8,6 @@ from datetime import datetime
 from playwright.async_api import async_playwright
 import aiohttp
 import time
-from concurrent.futures import ThreadPoolExecutor
 import queue
 
 try:
@@ -145,10 +144,24 @@ class TelegramSender:
             return False
             
     def _add_to_dlq(self, file_path, caption, chat_id):
-        """Add a failed message to the dead letter queue"""
+        """Add a failed message to the Redis-backed dead letter queue"""
         logger.debug(f"[TelegramSender._add_to_dlq] Adding file to DLQ: {file_path}")
         try:
-            # Implement DLQ logic here - can use Redis
+            # Imported lazily so importing the downloader never requires Redis
+            try:
+                from .database import db
+            except ImportError:
+                from database import db
+
+            if db is None:
+                logger.error(f"[TelegramSender._add_to_dlq] Redis unavailable, dropping DLQ entry: {file_path}")
+                return
+
+            db.add_to_dlq({
+                'file_path': file_path,
+                'caption': caption,
+                'chat_id': chat_id or self.chat_id,
+            })
             logger.warning(f"[TelegramSender._add_to_dlq] Added to DLQ: {file_path}")
         except Exception as e:
             logger.error(f"[TelegramSender._add_to_dlq] Error adding to DLQ: {str(e)}")
